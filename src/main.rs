@@ -1,14 +1,37 @@
 mod backend;
 
-use backend::{apps, autostart, cleaner, logs, process, sensors, services, system};
-use std::collections::VecDeque;
+use backend::{apps, autostart, cleaner, icons, logs, process, sensors, services, system};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use std::cell::RefCell;
 
 slint::include_modules!();
 
 fn to_shared(s: impl Into<String>) -> slint::SharedString {
     slint::SharedString::from(s.into())
+}
+
+// Image handles are bound to the UI thread: cache loaded icons here,
+// keyed by file path. The polling thread only passes paths (Send).
+thread_local! {
+    static ICON_IMGS: RefCell<HashMap<String, slint::Image>> = RefCell::new(HashMap::new());
+}
+
+fn cached_icon(path: &str) -> slint::Image {
+    ICON_IMGS.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(img) = c.get(path) {
+            return img.clone();
+        }
+        let img = slint::Image::load_from_path(std::path::Path::new(path)).unwrap_or_default();
+        if c.len() > 400 {
+            c.clear();
+        }
+        c.insert(path.to_string(), img.clone());
+        img
+    })
 }
 
 fn accent_pair(name: &str) -> (slint::Color, slint::Color) {
@@ -33,6 +56,17 @@ fn accent_pair(name: &str) -> (slint::Color, slint::Color) {
             slint::Color::from_rgb_u8(61, 174, 233),
             slint::Color::from_rgb_u8(123, 97, 255),
         ),
+    }
+}
+
+/// Translucent area-chart fill matching the accent.
+fn accent_fill(name: &str) -> slint::Color {
+    match name {
+        "mint" => slint::Color::from_argb_u8(46, 46, 204, 113),
+        "sunset" => slint::Color::from_argb_u8(46, 246, 116, 0),
+        "grape" => slint::Color::from_argb_u8(46, 155, 89, 182),
+        "gold" => slint::Color::from_argb_u8(46, 247, 181, 0),
+        _ => slint::Color::from_argb_u8(46, 61, 174, 233),
     }
 }
 
@@ -93,8 +127,10 @@ fn main() -> anyhow::Result<()> {
     let interval_cb = interval.clone();
     {
         let (c1, c2) = accent_pair(&accent_init);
+        let cf = accent_fill(&accent_init);
         ui.set_accent1(c1);
         ui.set_accent2(c2);
+        ui.set_area_fill(cf);
         ui.set_accent_name(to_shared(accent_init.clone()));
         ui.set_refresh_secs(interval_init as i32);
     }
@@ -104,10 +140,12 @@ fn main() -> anyhow::Result<()> {
             let name = name.to_string();
             let secs = *interval_cb.lock().unwrap();
             let (c1, c2) = accent_pair(&name);
+            let cf = accent_fill(&name);
             save_settings(&name, secs);
             let _ = w.upgrade_in_event_loop(move |ui| {
                 ui.set_accent1(c1);
                 ui.set_accent2(c2);
+                ui.set_area_fill(cf);
                 ui.set_accent_name(to_shared(name));
             });
         });
@@ -234,8 +272,11 @@ fn main() -> anyhow::Result<()> {
     std::thread::spawn(move || {
         let mut st = system::SysState::new();
         let users = system::uid_name_map();
+        let icon_db = icons::IconDb::build();
         let mut prev_disk: std::collections::HashMap<u32, (u64, u64)> =
             std::collections::HashMap::new();
+        let mut last_gpu_use: f32 = -1.0;
+        let mut last_gpu_sub = String::from("usage unavailable on this GPU");
         let mut tick: u64 = 0;
         let mut cpu_hist: VecDeque<f32> = VecDeque::from(vec![0.0; 60]);
         let mut mem_hist: VecDeque<f32> = VecDeque::from(vec![0.0; 60]);
@@ -287,6 +328,50 @@ fn main() -> anyhow::Result<()> {
             let ndh: Vec<f32> = nd_hist.iter().copied().collect();
             let nuh: Vec<f32> = nu_hist.iter().copied().collect();
             let net_rate = format!("↓ {:.0} KB/s · ↑ {:.0} KB/s", snap.rx_kbps, snap.tx_kbps);
+            if tick.is_multiple_of(5) {
+                // Prefer the dedicated GPU: one nvidia-smi call gives name+usage+temp.
+                if let Some(info) = sensors::nvidia_info() {
+                    if info.usage >= 0.0 {
+                        last_gpu_use = info.usage;
+                    }
+                    last_gpu_sub = if info.temp > -100.0 {
+                        format!("{:.0}°C · measured live", info.temp)
+                    } else {
+                        String::from("measured live")
+                    };
+                    let name = info.name.clone();
+                    let sub = last_gpu_sub.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_gpu_name(to_shared(name));
+                        ui.set_gpu_sub(to_shared(sub));
+                    });
+                } else if let Some(v) = sensors::gpu_usage() {
+                    last_gpu_use = v;
+                    last_gpu_sub = String::from("measured live");
+                }
+            }
+            let gpu_sub_now = last_gpu_sub.clone();
+            let gpu_use_now = last_gpu_use;
+            let batt_now = sensors::battery_pct();
+            let mounts_now = snap
+                .mounts
+                .iter()
+                .map(|(mp, used, total)| {
+                    let pct = (*used as f32 / *total as f32 * 100.0).clamp(0.0, 100.0);
+                    (mp.clone(), system::fmt_bytes(*used), system::fmt_bytes(*total), pct)
+                })
+                .collect::<Vec<_>>();
+            // resolve process icon paths (Strings cross threads; images load on UI thread)
+            let mut proc_icon_paths: HashMap<i32, Option<String>> = HashMap::new();
+            for p in procs.iter() {
+                if proc_icon_paths.contains_key(&p.pid) {
+                    continue;
+                }
+                proc_icon_paths.insert(
+                    p.pid,
+                    icon_db.find(&p.icon_key).map(|s| s.to_string()),
+                );
+            }
 
             let res = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_cpu_usage(snap.cpu_usage);
@@ -306,15 +391,36 @@ fn main() -> anyhow::Result<()> {
                 ui.set_desktop(to_shared(snap.desktop));
                 ui.set_net_stat(to_shared(snap.net_stat));
                 ui.set_disk_stat(to_shared(snap.disk_stat));
+                ui.set_disk_pct(snap.disk_pct);
                 ui.set_cpu_temp(to_shared(temp));
+                ui.set_cpu_freq(to_shared(snap.cpu_freq));
+                ui.set_mem_free(round2(snap.mem_free_gb));
                 ui.set_clock(to_shared(clock));
                 ui.set_proc_count(proc_count);
+                ui.set_gpu_use(gpu_use_now);
+                ui.set_gpu_sub(to_shared(gpu_sub_now));
+                match batt_now {
+                    Some((v, charging)) => {
+                        ui.set_batt_pct(v);
+                        ui.set_batt_charging(charging);
+                    }
+                    None => ui.set_batt_pct(-1.0),
+                }
                 if !batt.is_empty() {
                     ui.set_battery(to_shared(batt));
                 }
                 if !gpu.is_empty() {
                     ui.set_gpu_name(to_shared(gpu));
                 }
+                let mrows: Vec<MountRow> = mounts_now
+                    .iter()
+                    .map(|(mp, used, total, p)| MountRow {
+                        mp: to_shared(mp.clone()),
+                        info: to_shared(format!("{used} / {total}")),
+                        pct: *p,
+                    })
+                    .collect();
+                ui.set_mounts(std::rc::Rc::new(slint::VecModel::from(mrows)).into());
 
                 let rows: Vec<ProcRow> = procs
                     .iter()
@@ -327,6 +433,10 @@ fn main() -> anyhow::Result<()> {
                         user: to_shared(p.user.clone()),
                         status: to_shared(p.status.clone()),
                         disk_str: to_shared(p.disk_str.clone()),
+                        icon: match proc_icon_paths.get(&p.pid).and_then(|o| o.as_deref()) {
+                            Some(path) => cached_icon(path),
+                            None => Default::default(),
+                        },
                     })
                     .collect();
                 ui.set_processes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
@@ -340,12 +450,24 @@ fn main() -> anyhow::Result<()> {
                     .collect();
                 ui.set_cores(std::rc::Rc::new(slint::VecModel::from(crows)).into());
 
-                ui.set_cpu_hist(std::rc::Rc::new(slint::VecModel::from(ch)).into());
-                ui.set_mem_hist(std::rc::Rc::new(slint::VecModel::from(mh)).into());
-                ui.set_swap_hist(std::rc::Rc::new(slint::VecModel::from(sh)).into());
+                ui.set_cpu_hist(std::rc::Rc::new(slint::VecModel::from(ch.clone())).into());
+                ui.set_mem_hist(std::rc::Rc::new(slint::VecModel::from(mh.clone())).into());
+                ui.set_swap_hist(std::rc::Rc::new(slint::VecModel::from(sh.clone())).into());
                 ui.set_netdown_hist(std::rc::Rc::new(slint::VecModel::from(ndh)).into());
                 ui.set_netup_hist(std::rc::Rc::new(slint::VecModel::from(nuh)).into());
                 ui.set_net_rate(to_shared(net_rate));
+                let (ca, cl, cly) = area_cmds(&ch);
+                ui.set_cpu_area(to_shared(ca));
+                ui.set_cpu_line(to_shared(cl));
+                ui.set_cpu_ly(cly);
+                let (ma, ml, mly) = area_cmds(&mh);
+                ui.set_mem_area(to_shared(ma));
+                ui.set_mem_line(to_shared(ml));
+                ui.set_mem_ly(mly);
+                let (sa, sl, sly) = area_cmds(&sh);
+                ui.set_swap_area(to_shared(sa));
+                ui.set_swap_line(to_shared(sl));
+                ui.set_swap_ly(sly);
             });
             if res.is_err() {
                 break; // window closed
@@ -361,6 +483,27 @@ fn main() -> anyhow::Result<()> {
 
 fn round2(v: f32) -> f32 {
     (v * 100.0).round() / 100.0
+}
+
+/// Build SVG path commands for a 60-point area chart (300x90 viewbox).
+/// Returns (area_fill_commands, line_commands, last_y).
+fn area_cmds(data: &[f32]) -> (String, String, f32) {
+    const HH: f32 = 90.0;
+    let y = |v: f32| HH - (HH - 6.0) * v.clamp(0.0, 100.0) / 100.0;
+    let mut area = format!("M 0 {HH}");
+    let mut line = String::new();
+    for (i, v) in data.iter().enumerate() {
+        let x = i as f32 * 5.0;
+        let yy = y(*v);
+        if i == 0 {
+            line = format!("M {x:.1} {yy:.1}");
+        } else {
+            line += &format!(" L {x:.1} {yy:.1}");
+        }
+        area += &format!(" L {x:.1} {yy:.1}");
+    }
+    area += &format!(" L 295 {HH} Z");
+    (area, line, y(data.last().copied().unwrap_or(0.0)))
 }
 
 fn pct(used: f32, total: f32) -> f32 {

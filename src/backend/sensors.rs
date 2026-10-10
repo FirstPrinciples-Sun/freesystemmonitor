@@ -48,9 +48,23 @@ pub fn battery() -> String {
     "AC / no battery".into()
 }
 
+/// (percent, charging?) — None on desktops without a battery.
+pub fn battery_pct() -> Option<(f32, bool)> {
+    for bat in ["BAT0", "BAT1"] {
+        let cap = std::fs::read_to_string(format!("/sys/class/power_supply/{bat}/capacity"));
+        if let Ok(c) = cap {
+            if let Ok(v) = c.trim().parse::<f32>() {
+                let st = std::fs::read_to_string(format!("/sys/class/power_supply/{bat}/status"))
+                    .unwrap_or_default();
+                let charging = st.trim().eq_ignore_ascii_case("charging");
+                return Some((v.clamp(0.0, 100.0), charging));
+            }
+        }
+    }
+    None
+}
+
 fn short_gpu(s: &str) -> String {
-    // "00:02.0 VGA compatible controller: Intel Corporation Raptor Lake-P [UHD Graphics] (rev 04)"
-    // -> "Intel Raptor Lake-P [UHD Graphics]"
     let mut t = s.to_string();
     for prefix in [
         "VGA compatible controller: ",
@@ -110,4 +124,76 @@ pub fn gpu_name() -> String {
         }
     }
     "Unknown GPU".into()
+}
+
+/// NVIDIA dedicated GPU info (single nvidia-smi call): (name, usage%, temp°C).
+pub struct GpuInfo {
+    pub name: String,
+    pub usage: f32,
+    pub temp: f32,
+}
+
+pub fn nvidia_info() -> Option<GpuInfo> {
+    let o = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,utilization.gpu,temperature.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&o.stdout).lines().next()?.to_string();
+    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    Some(GpuInfo {
+        name: parts[0].to_string(),
+        usage: parts[1].parse::<f32>().unwrap_or(-1.0),
+        temp: parts[2].parse::<f32>().unwrap_or(-273.0),
+    })
+}
+
+/// GPU utilization 0..100, or None when it can't be measured.
+/// Tries NVIDIA (nvidia-smi), then AMD (amdgpu busy_percent sysfs).
+pub fn gpu_usage() -> Option<f32> {
+    if let Ok(o) = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        if o.status.success() {
+            let txt = String::from_utf8_lossy(&o.stdout);
+            if let Some(line) = txt.lines().next() {
+                if let Ok(v) = line.trim().parse::<f32>() {
+                    if (0.0..=100.0).contains(&v) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
+    // AMD: /sys/class/drm/cardN/device/gpu_busy_percent
+    if let Ok(rd) = std::fs::read_dir("/sys/class/drm") {
+        let mut cards: Vec<_> = rd
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with("card") && n["card".len()..].chars().all(|c| c.is_ascii_digit())
+            })
+            .collect();
+        cards.sort_by_key(|e| e.file_name());
+        for c in cards {
+            let p = c.path().join("device/gpu_busy_percent");
+            if let Ok(t) = std::fs::read_to_string(&p) {
+                if let Ok(v) = t.trim().parse::<f32>() {
+                    if (0.0..=100.0).contains(&v) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+    }
+    None
 }

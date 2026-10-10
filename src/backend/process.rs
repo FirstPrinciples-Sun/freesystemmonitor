@@ -11,6 +11,7 @@ pub struct ProcInfo {
     pub user: String,
     pub status: String,
     pub disk_str: String,
+    pub icon_key: String,
 }
 
 pub fn top_processes(
@@ -54,6 +55,12 @@ pub fn top_processes(
                 None => 0.0,
             };
             prev_disk.insert(pid.as_u32(), (r, w));
+            // icon lookup key: exe stem ("firefox") beats comm name ("firefox-bin")
+            let icon_key = p
+                .exe()
+                .and_then(|e| e.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| name.to_lowercase());
             Some(ProcInfo {
                 pid: pid.as_u32() as i32,
                 name,
@@ -63,6 +70,7 @@ pub fn top_processes(
                 user,
                 status: format!("{:?}", p.status()),
                 disk_str: fmt_rate(kbps),
+                icon_key,
             })
         })
         .collect();

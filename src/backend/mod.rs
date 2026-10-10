@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod autostart;
 pub mod cleaner;
+pub mod icons;
 pub mod logs;
 pub mod process;
 pub mod sensors;

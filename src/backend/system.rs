@@ -19,6 +19,10 @@ pub struct Snapshot {
     pub rx_kbps: f64,
     pub tx_kbps: f64,
     pub disk_stat: String,
+    pub disk_pct: f32,
+    pub mounts: Vec<(String, u64, u64)>,
+    pub cpu_freq: String,
+    pub mem_free_gb: f32,
 }
 
 pub struct SysState {
@@ -102,9 +106,10 @@ impl SysState {
             fmt_bytes(tx)
         );
 
-        // disk usage: biggest mount
+        // disk usage: biggest mount + full list for the Storage card
         let mut disk_stat = String::from("—");
         let mut best = (0u64, 0u64, String::new());
+        let mut mounts: Vec<(String, u64, u64)> = vec![];
         for d in self.disks.list() {
             let total = d.total_space();
             if total > best.0 {
@@ -114,10 +119,21 @@ impl SysState {
                     d.mount_point().to_string_lossy().into_owned(),
                 );
             }
+            if total > 0 {
+                mounts.push((
+                    d.mount_point().to_string_lossy().into_owned(),
+                    total.saturating_sub(d.available_space()),
+                    total,
+                ));
+            }
         }
+        mounts.sort_by(|a, b| b.2.cmp(&a.2));
+        mounts.truncate(5);
+        let mut disk_pct = 0.0f32;
         if best.0 > 0 {
             let used = best.0 - best.1;
             let pct = used as f64 / best.0 as f64 * 100.0;
+            disk_pct = pct.clamp(0.0, 100.0) as f32;
             disk_stat = if best.2 == "/" {
                 format!("{} / {} ({:.0}%)", fmt_bytes(used), fmt_bytes(best.0), pct)
             } else {
@@ -130,6 +146,22 @@ impl SysState {
                 )
             };
         }
+
+        // cpu frequency (average, GHz)
+        let mut freq_mhz = 0u64;
+        let mut freq_n = 0u64;
+        for c in self.sys.cpus() {
+            if c.frequency() > 0 {
+                freq_mhz += c.frequency();
+                freq_n += 1;
+            }
+        }
+        let cpu_freq = if freq_n > 0 {
+            format!("{:.1} GHz avg", freq_mhz as f64 / freq_n as f64 / 1000.0)
+        } else {
+            "—".into()
+        };
+        let mem_free_gb = self.sys.free_memory() as f32 / 1_073_741_824.0;
 
         Snapshot {
             cpu_usage,
@@ -149,6 +181,10 @@ impl SysState {
             rx_kbps: rx_rate,
             tx_kbps: tx_rate,
             disk_stat,
+            disk_pct,
+            mounts,
+            cpu_freq,
+            mem_free_gb,
         }
     }
 

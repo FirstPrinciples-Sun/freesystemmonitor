@@ -9,6 +9,7 @@ struct ProcRow {
     user: string,
     status: string,
     disk_str: string,
+    icon: image,
 }
 
 struct CoreRow {
@@ -39,6 +40,12 @@ struct AppRow {
 
 struct SizeRow {
     label: string,
+    info: string,
+    pct: float,
+}
+
+struct MountRow {
+    mp: string,
     info: string,
     pct: float,
 }
@@ -86,6 +93,126 @@ component HistGraph inherits Rectangle {
                 opacity: 0.85;
             }
         }
+    }
+}
+
+// ---- area chart: filled time series (path strings built in Rust; binding-safe) ----
+component AreaChart inherits Rectangle {
+    in property <string> area;
+    in property <string> line;
+    in property <color> a1;
+    in property <color> fillc;
+    in property <float> lasty;
+    in property <float> hh: 90;
+    // fixed 300px block: deterministic in any card, centered by the layout
+    width: 300px;
+    height: hh * 1px;
+    clip: true;
+    // gridlines
+    Rectangle { y: (hh * 0.75) * 1px; height: 1px; width: 300px; background: #ffffff0e; }
+    Rectangle { y: (hh * 0.5) * 1px; height: 1px; width: 300px; background: #ffffff0e; }
+    Rectangle { y: (hh * 0.25) * 1px; height: 1px; width: 300px; background: #ffffff0e; }
+    Path {
+        width: 300px;
+        height: hh * 1px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 300;
+        viewbox-height: hh;
+        commands: area;
+        fill: fillc;
+    }
+    Path {
+        width: 300px;
+        height: hh * 1px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 300;
+        viewbox-height: hh;
+        commands: line;
+        fill: #00000000;
+        stroke: a1;
+        stroke-width: 2px;
+    }
+    Rectangle {
+        width: 7px;
+        height: 7px;
+        border-radius: 4px;
+        x: 292px;
+        y: lasty * 1px - 3px;
+        background: @linear-gradient(135deg, a1, #ffffff);
+        drop-shadow-blur: 8px;
+        drop-shadow-color: a1;
+    }
+}
+
+// ---- donut gauge: pie wedge + solid hub + center label ----
+component Donut inherits Rectangle {
+    in property <float> pct;
+    in property <color> a1;
+    in property <string> caption;
+    width: 118px;
+    height: 118px;
+    Path {
+        width: 100px;
+        height: 100px;
+        x: 9px;
+        y: 9px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        MoveTo { x: 50; y: 8; }
+        ArcTo { radius-x: 42; radius-y: 42; x-rotation: 0; large-arc: true; sweep: true; x: 50; y: 92; }
+        ArcTo { radius-x: 42; radius-y: 42; x-rotation: 0; large-arc: true; sweep: true; x: 50; y: 8; }
+        fill: #ffffff12;
+    }
+    if pct > 0.5 && pct < 99.5 : Path {
+        width: 100px;
+        height: 100px;
+        x: 9px;
+        y: 9px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        MoveTo { x: 50; y: 50; }
+        LineTo { x: 50; y: 8; }
+        ArcTo { radius-x: 42; radius-y: 42; x-rotation: 0; large-arc: pct > 50; sweep: true; x: 50 + 42 * Math.cos((pct * 3.6 - 90) * 1deg); y: 50 + 42 * Math.sin((pct * 3.6 - 90) * 1deg); }
+        Close { }
+        fill: a1;
+    }
+    if pct >= 99.5 : Path {
+        width: 100px;
+        height: 100px;
+        x: 9px;
+        y: 9px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        MoveTo { x: 50; y: 8; }
+        ArcTo { radius-x: 42; radius-y: 42; x-rotation: 0; large-arc: true; sweep: true; x: 50; y: 92; }
+        ArcTo { radius-x: 42; radius-y: 42; x-rotation: 0; large-arc: true; sweep: true; x: 50; y: 8; }
+        fill: a1;
+    }
+    Rectangle {
+        x: 30px;
+        y: 30px;
+        width: 58px;
+        height: 58px;
+        border-radius: 29px;
+        background: #161b28;
+    }
+    Text {
+        text: caption;
+        color: #ffffff;
+        font-size: 17px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 118px;
+        height: 118px;
     }
 }
 
@@ -168,32 +295,6 @@ component Body inherits Text {
     overflow: elide;
 }
 
-// big dashboard number with soft neon echo behind the glyphs
-component GlowNum inherits Rectangle {
-    in property <string> label;
-    in property <color> glow;
-    height: 28px;
-    Text {
-        text: label;
-        color: glow;
-        x: 1px;
-        y: 1px;
-        font-size: 20px;
-        font-weight: 700;
-        opacity: 0.55;
-        overflow: elide;
-        width: parent.width;
-    }
-    Text {
-        text: label;
-        color: #ffffff;
-        font-size: 20px;
-        font-weight: 700;
-        overflow: elide;
-        width: parent.width;
-    }
-}
-
 export component AppWindow inherits Window {
     title: "FreeMon — System Monitor for KDE";
     preferred-width: 1160px;
@@ -244,7 +345,25 @@ export component AppWindow inherits Window {
     in-out property <[float]> swap-hist;
     in-out property <[float]> netdown-hist;
     in-out property <[float]> netup-hist;
+    in-out property <string> cpu-area: "";
+    in-out property <string> cpu-line: "";
+    in-out property <float> cpu-ly: 84;
+    in-out property <string> mem-area: "";
+    in-out property <string> mem-line: "";
+    in-out property <float> mem-ly: 84;
+    in-out property <string> swap-area: "";
+    in-out property <string> swap-line: "";
+    in-out property <float> swap-ly: 84;
     in-out property <string> net-rate: "—";
+    in-out property <float> disk-pct: 0;
+    in-out property <string> cpu-freq: "—";
+    in-out property <float> mem-free: 0;
+    in-out property <float> gpu-use: -1;
+    in-out property <string> gpu-sub: "usage unavailable on this GPU";
+    in-out property <float> batt-pct: -1;
+    in-out property <bool> batt-charging: false;
+    in-out property <color> area-fill: #3daee92e;
+    in-out property <[MountRow]> mounts;
     in-out property <[SizeRow]> size-rows;
     in-out property <int> log-err: 0;
     in-out property <int> log-warn: 0;
@@ -362,17 +481,43 @@ export component AppWindow inherits Window {
                         spacing: 12px;
                         Card {
                             horizontal-stretch: 1;
-                            CardTitle { text: "CPU — " + cpu-brand; }
-                            GlowNum { label: round(cpu-usage) + "%  ·  " + cpu-count + " threads  ·  " + cpu-temp; glow: accent2; }
-                            GBar { pct: cpu-usage; a1: accent1; a2: accent2; }
-                            Dim { text: "load " + load-avg + "  ·  up " + uptime; }
+                            HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: cpu-usage; a1: accent1; caption: round(cpu-usage) + "%"; }
+                            }
+                            CardTitle { text: "CPU"; horizontal-alignment: center; }
+                            Dim { text: cpu-brand; horizontal-alignment: center; }
+                            Dim { text: cpu-count + " threads · " + cpu-freq + " · " + cpu-temp; horizontal-alignment: center; }
                         }
                         Card {
                             horizontal-stretch: 1;
-                            CardTitle { text: "Memory"; }
-                            GlowNum { label: mem-used-gb + " / " + mem-total-gb + " GB"; glow: accent1; }
-                            GBar { pct: mem-pct; a1: accent1; a2: accent2; }
-                            Dim { text: "Swap " + swap-used-gb + " / " + swap-total-gb + " GB (" + round(swap-pct) + "%)"; }
+                            HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: mem-pct; a1: accent1; caption: round(mem-pct) + "%"; }
+                            }
+                            CardTitle { text: "Memory"; horizontal-alignment: center; }
+                            Dim { text: mem-used-gb + " / " + mem-total-gb + " GB"; horizontal-alignment: center; }
+                            Dim { text: "free " + mem-free + " GB · load " + load-avg; horizontal-alignment: center; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: disk-pct; a1: accent1; caption: round(disk-pct) + "%"; }
+                            }
+                            CardTitle { text: "Disk"; horizontal-alignment: center; }
+                            Dim { text: disk-stat; horizontal-alignment: center; }
+                            Dim { text: "up " + uptime; horizontal-alignment: center; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            if gpu-use >= 0 : HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: gpu-use; a1: accent2; caption: round(gpu-use) + "%"; }
+                            }
+                            CardTitle { text: "GPU"; horizontal-alignment: center; }
+                            Dim { text: gpu-name; horizontal-alignment: center; }
+                            Dim { text: gpu-sub; horizontal-alignment: center; }
                         }
                     }
                     HorizontalLayout {
@@ -380,12 +525,12 @@ export component AppWindow inherits Window {
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "CPU history · 60s"; }
-                            HistGraph { data: cpu-hist; a1: accent1; a2: accent2; }
+                            AreaChart { area: cpu-area; line: cpu-line; lasty: cpu-ly; a1: accent1; fillc: area-fill; }
                         }
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "Memory history · 60s"; }
-                            HistGraph { data: mem-hist; a1: accent1; a2: accent2; }
+                            AreaChart { area: mem-area; line: mem-line; lasty: mem-ly; a1: accent1; fillc: area-fill; }
                         }
                     }
                     HorizontalLayout {
@@ -393,7 +538,7 @@ export component AppWindow inherits Window {
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "Swap history · 60s — " + swap-used-gb + " / " + swap-total-gb + " GB"; }
-                            HistGraph { data: swap-hist; a1: accent1; a2: accent2; }
+                            AreaChart { area: swap-area; line: swap-line; lasty: swap-ly; a1: accent1; fillc: area-fill; }
                         }
                         Card {
                             horizontal-stretch: 1;
@@ -410,14 +555,26 @@ export component AppWindow inherits Window {
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "Power"; }
-                            Body { text: "🔋  " + battery; }
-                            Dim { text: "up " + uptime; }
+                            if batt-pct >= 0 : HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: batt-pct; a1: accent1; caption: round(batt-pct) + "%"; }
+                            }
+                            Dim { text: batt-pct >= 0 ? ("🔋  " + battery + (batt-charging ? " · charging" : "")) : "🔋  AC power · no battery"; horizontal-alignment: center; }
+                            Dim { text: "🌡  " + cpu-temp + "  ·  up " + uptime; horizontal-alignment: center; }
                         }
                         Card {
                             horizontal-stretch: 1;
-                            CardTitle { text: "Storage & Graphics"; }
-                            Body { text: "💾  " + disk-stat; }
-                            Body { text: "🎮  " + gpu-name; }
+                            CardTitle { text: "Storage"; }
+                            VerticalLayout {
+                                spacing: 6px;
+                                for m in mounts: HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: m.mp; width: 110px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    GBar { pct: m.pct; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                    Text { text: round(m.pct) + "%"; width: 44px; color: #9aa0a6; font-size: 12px; vertical-alignment: center; }
+                                }
+                            }
+                            Dim { text: disk-stat + " total on biggest volume"; }
                         }
                         Card {
                             horizontal-stretch: 1;
@@ -462,7 +619,8 @@ export component AppWindow inherits Window {
                                     padding-left: 8px;
                                     padding-right: 4px;
                                     Text { text: p.pid; width: 48px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
-                                    Text { text: p.name; width: 170px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    Image { source: p.icon; width: 22px; height: 22px; }
+                                    Text { text: p.name; width: 148px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
                                     Text { text: round(p.cpu * 10) / 10 + "%"; width: 56px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
                                     Text { text: p.mem_mb + " MB"; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
                                     Text { text: p.disk_str; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
