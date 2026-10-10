@@ -49,7 +49,7 @@ component GBar inherits Rectangle {
     in property <color> a1;
     in property <color> a2;
     height: 9px;
-    background: #ffffff14;
+    background: #ffffff12;
     border-radius: 5px;
     Rectangle {
         x: 0px;
@@ -58,6 +58,8 @@ component GBar inherits Rectangle {
         height: parent.height;
         background: @linear-gradient(90deg, a1, a2);
         border-radius: 5px;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: a1;
     }
 }
 
@@ -97,6 +99,8 @@ component NavItem inherits Rectangle {
     height: 38px;
     border-radius: 11px;
     background: active ? @linear-gradient(90deg, a1, a2) : #ffffff00;
+    drop-shadow-blur: active ? 18px : 0px;
+    drop-shadow-color: a2;
     HorizontalLayout {
         padding-left: 14px;
         Text {
@@ -131,9 +135,9 @@ component Swatch inherits Rectangle {
 
 // ---- glass card ----
 component Card inherits Rectangle {
-    background: #ffffff0d;
+    background: #ffffff09;
     border-width: 1px;
-    border-color: #ffffff1f;
+    border-color: #ffffff26;
     border-radius: 16px;
     drop-shadow-blur: 24px;
     drop-shadow-color: #00000055;
@@ -164,13 +168,39 @@ component Body inherits Text {
     overflow: elide;
 }
 
+// big dashboard number with soft neon echo behind the glyphs
+component GlowNum inherits Rectangle {
+    in property <string> label;
+    in property <color> glow;
+    height: 28px;
+    Text {
+        text: label;
+        color: glow;
+        x: 1px;
+        y: 1px;
+        font-size: 20px;
+        font-weight: 700;
+        opacity: 0.55;
+        overflow: elide;
+        width: parent.width;
+    }
+    Text {
+        text: label;
+        color: #ffffff;
+        font-size: 20px;
+        font-weight: 700;
+        overflow: elide;
+        width: parent.width;
+    }
+}
+
 export component AppWindow inherits Window {
     title: "FreeMon — System Monitor for KDE";
     preferred-width: 1160px;
     preferred-height: 720px;
     min-width: 940px;
     min-height: 580px;
-    background: @linear-gradient(135deg, #262b3a 0%, #161922 55%, #1c2130 100%);
+    background: @linear-gradient(150deg, #272e40 0%, #14171f 48%, #1b2133 100%);
 
     // ---- navigation ----
     in-out property <int> current-page: 0;
@@ -260,6 +290,8 @@ export component AppWindow inherits Window {
                         height: 34px;
                         border-radius: 10px;
                         background: @linear-gradient(135deg, accent1, accent2);
+                        drop-shadow-blur: 14px;
+                        drop-shadow-color: accent2;
                         Text {
                             text: "❄";
                             color: #ffffff;
@@ -301,6 +333,8 @@ export component AppWindow inherits Window {
                         Rectangle {
                             width: 8px; height: 8px; border-radius: 4px;
                             background: @linear-gradient(135deg, accent1, accent2);
+                            drop-shadow-blur: 6px;
+                            drop-shadow-color: accent1;
                         }
                         Text {
                             text: "CPU " + round(cpu-usage) + "% · " + proc-count + " procs";
@@ -329,14 +363,14 @@ export component AppWindow inherits Window {
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "CPU — " + cpu-brand; }
-                            Text { text: round(cpu-usage) + "%  ·  " + cpu-count + " threads  ·  " + cpu-temp; color: #ffffff; font-size: 20px; font-weight: 700; }
+                            GlowNum { label: round(cpu-usage) + "%  ·  " + cpu-count + " threads  ·  " + cpu-temp; glow: accent2; }
                             GBar { pct: cpu-usage; a1: accent1; a2: accent2; }
                             Dim { text: "load " + load-avg + "  ·  up " + uptime; }
                         }
                         Card {
                             horizontal-stretch: 1;
                             CardTitle { text: "Memory"; }
-                            Text { text: mem-used-gb + " / " + mem-total-gb + " GB"; color: #ffffff; font-size: 20px; font-weight: 700; }
+                            GlowNum { label: mem-used-gb + " / " + mem-total-gb + " GB"; glow: accent1; }
                             GBar { pct: mem-pct; a1: accent1; a2: accent2; }
                             Dim { text: "Swap " + swap-used-gb + " / " + swap-total-gb + " GB (" + round(swap-pct) + "%)"; }
                         }
