@@ -138,6 +138,7 @@ component Card inherits Rectangle {
     drop-shadow-blur: 24px;
     drop-shadow-color: #00000055;
     VerticalLayout {
+        alignment: start;
         padding: 14px;
         spacing: 8px;
         @children
@@ -320,6 +321,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 0 : OVERVIEW ----
                 if current-page == 0 : VerticalLayout {
+                    alignment: start;
                     spacing: 12px;
                     Text { text: "Overview"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     HorizontalLayout {
@@ -395,6 +397,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 1 : PROCESSES ----
                 if current-page == 1 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Processes (" + proc-count + ")"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Dim { text: "Top 100 by CPU · Stop sends SIGTERM, Kill sends SIGKILL"; }
@@ -440,6 +443,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 2 : PERFORMANCE ----
                 if current-page == 2 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Performance"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Dim { text: "Live per-thread load · follows refresh interval"; }
@@ -479,6 +483,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 3 : SERVICES ----
                 if current-page == 3 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     HorizontalLayout {
                         spacing: 10px;
@@ -516,6 +521,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 4 : STARTUP ----
                 if current-page == 4 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Startup"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Dim { text: "Apps that launch at login · toggles only touch your own ~/.config/autostart"; }
@@ -549,6 +555,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 5 : APPS ----
                 if current-page == 5 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Applications (" + app-tot + ")"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Dim { text: "Flatpak applications · bar shows size relative to the largest"; }
@@ -577,6 +584,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 6 : CLEANER ----
                 if current-page == 6 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Cleaner"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Dim { text: "Only your own cache, trash and thumbnails · journal vacuum may ask for root"; }
@@ -591,7 +599,6 @@ export component AppWindow inherits Window {
                                 Text { text: r.info; width: 80px; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
                             }
                         }
-                        Dim { text: cleaner-info; }
                         HorizontalLayout {
                             spacing: 8px;
                             Button { text: "Journal 200M"; clicked => { clean-kind("journal"); } }
@@ -604,6 +611,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 7 : LOGS ----
                 if current-page == 7 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     HorizontalLayout {
                         spacing: 10px;
@@ -632,6 +640,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 8 : ABOUT ----
                 if current-page == 8 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "About"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Card {
@@ -661,6 +670,7 @@ export component AppWindow inherits Window {
 
                 // ---- PAGE 9 : THEME ----
                 if current-page == 9 : VerticalLayout {
+                    alignment: start;
                     spacing: 10px;
                     Text { text: "Theme"; color: #ffffff; font-size: 24px; font-weight: 800; }
                     Card {
