@@ -114,7 +114,7 @@ fn parse_desktop(path: &std::path::Path) -> Option<(Vec<String>, String)> {
         if let Some(v) = line.strip_prefix("Exec=") {
             // first real token, skipping "env" and VAR= assignments
             let mut base: Option<String> = None;
-            for tok in v.trim().split_whitespace() {
+            for tok in v.split_whitespace() {
                 if tok == "env" || tok.contains('=') || tok.starts_with('%') {
                     continue;
                 }

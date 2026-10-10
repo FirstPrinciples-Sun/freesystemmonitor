@@ -1,4 +1,4 @@
-import { Button, LineEdit, CheckBox, ListView, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, CheckBox, ComboBox, ListView, ScrollView } from "std-widgets.slint";
 
 struct ProcRow {
     name: string,
@@ -406,11 +406,19 @@ export component AppWindow inherits Window {
     in-out property <string> logs-text: "";
     in-out property <string> cleaner-info: "";
     in-out property <string> search-text: "";
+    in-out property <int> sort-idx: 0;
+    in-out property <string> sort-name: "CPU";
+    in-out property <int> sel-pid: 0;
+    in-out property <string> sel-name: "";
+    in-out property <int> sel-nice: 0;
 
     callback kill-process(int);
     callback stop-process(int);
     callback renice-process(int, int);
     callback search-changed(string);
+    callback set-sort(string);
+    callback select-process(int, string);
+    callback nice-delta(int);
     callback service-action(string, string);
     callback refresh-services();
     callback toggle-autostart(string, bool);
@@ -652,7 +660,7 @@ export component AppWindow inherits Window {
                     alignment: start;
                     spacing: 10px;
                     Text { text: "Processes (" + proc-count + ")"; color: #ffffff; font-size: 24px; font-weight: 800; }
-                    Dim { text: "Top 100 by CPU · Stop sends SIGTERM, Kill sends SIGKILL"; }
+                    Dim { text: "Top 100 · sorted by " + sort-name + " · Stop is SIGTERM, Kill is SIGKILL · click an icon to inspect"; }
                     Card {
                         HorizontalLayout {
                             spacing: 8px;
@@ -661,6 +669,12 @@ export component AppWindow inherits Window {
                                 text <=> search-text;
                                 edited => { search-changed(self.text); }
                                 horizontal-stretch: 1;
+                            }
+                            ComboBox {
+                                model: ["CPU", "Memory", "Disk", "Name", "PID"];
+                                current-index <=> sort-idx;
+                                selected(value) => { set-sort(value); }
+                                width: 110px;
                             }
                             Button { text: "Clear"; clicked => { search.text = ""; search-changed(""); } }
                         }
@@ -673,8 +687,9 @@ export component AppWindow inherits Window {
                             height: 420px;
                             for p[i] in processes: Rectangle {
                                 height: 36px;
-                                background: Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00;
+                                background: p.pid == sel-pid ? #ffffff14 : (Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00);
                                 border-radius: 8px;
+                                TouchArea { x: 62px; width: 22px; height: 36px; clicked => { select-process(p.pid, p.name); } }
                                 HorizontalLayout {
                                     spacing: 6px;
                                     padding-left: 8px;
@@ -690,6 +705,15 @@ export component AppWindow inherits Window {
                                     Button { text: "Kill"; clicked => { kill-process(p.pid); } }
                                 }
                             }
+                        }
+                    }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 8px;
+                            if sel-pid > 0 : Text { text: "● " + sel-name + " (" + sel-pid + ") · nice " + sel-nice; color: #ffffff; font-size: 13px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                            if sel-pid <= 0 : Text { text: "○ click an app icon above to inspect and change priority"; color: #9aa0a6; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                            Button { text: "Priority −"; enabled: sel-pid > 0; clicked => { nice-delta(-1); } }
+                            Button { text: "Priority +"; enabled: sel-pid > 0; clicked => { nice-delta(1); } }
                         }
                     }
                 }

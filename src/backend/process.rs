@@ -11,7 +11,39 @@ pub struct ProcInfo {
     pub user: String,
     pub status: String,
     pub disk_str: String,
+    pub disk_kbps: f32,
     pub icon_key: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    Cpu,
+    Mem,
+    Disk,
+    Name,
+    Pid,
+}
+
+impl SortMode {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "Memory" => Self::Mem,
+            "Disk" => Self::Disk,
+            "Name" => Self::Name,
+            "PID" => Self::Pid,
+            _ => Self::Cpu,
+        }
+    }
+
+    pub fn index(&self) -> i32 {
+        match self {
+            Self::Cpu => 0,
+            Self::Mem => 1,
+            Self::Disk => 2,
+            Self::Name => 3,
+            Self::Pid => 4,
+        }
+    }
 }
 
 pub fn top_processes(
@@ -21,6 +53,7 @@ pub fn top_processes(
     secs: f32,
     filter: &str,
     limit: usize,
+    sort: SortMode,
 ) -> Vec<ProcInfo> {
     use sysinfo::Pid;
     // drop dead pids so the map doesn't grow forever
@@ -70,16 +103,29 @@ pub fn top_processes(
                 user,
                 status: format!("{:?}", p.status()),
                 disk_str: fmt_rate(kbps),
+                disk_kbps: kbps,
                 icon_key,
             })
         })
         .collect();
-    // sort by CPU desc, then MEM
-    v.sort_by(|a, b| {
-        b.cpu
-            .partial_cmp(&a.cpu)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // sort by the selected column
+    match sort {
+        SortMode::Cpu => v.sort_by(|a, b| {
+            b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        SortMode::Mem => v.sort_by(|a, b| {
+            b.mem_mb
+                .partial_cmp(&a.mem_mb)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        SortMode::Disk => v.sort_by(|a, b| {
+            b.disk_kbps
+                .partial_cmp(&a.disk_kbps)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        SortMode::Name => v.sort_by_key(|a| a.name.to_lowercase()),
+        SortMode::Pid => v.sort_by_key(|a| a.pid),
+    }
     v.truncate(limit);
     v
 }
@@ -116,6 +162,14 @@ pub fn renice(pid: i32, nice: i32) -> anyhow::Result<String> {
     }
 }
 
+pub fn read_nice(pid: i32) -> Option<i32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ni=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse::<i32>().ok()
+}
+
 fn fmt_rate(kbps: f32) -> String {
     if kbps < 0.5 {
         "—".into()
@@ -123,5 +177,45 @@ fn fmt_rate(kbps: f32) -> String {
         format!("{kbps:.0} KB/s")
     } else {
         format!("{:.1} MB/s", kbps / 1024.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sysinfo::ProcessesToUpdate;
+
+    fn live_system() -> System {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        sys
+    }
+
+    #[test]
+    fn sort_modes_order_correctly() {
+        use std::collections::HashMap;
+        let sys = live_system();
+        let users: HashMap<u32, String> = HashMap::new();
+        let mut prev = HashMap::new();
+        let by_pid = top_processes(&sys, &users, &mut prev, 1.0, "", 50, SortMode::Pid);
+        assert!(!by_pid.is_empty());
+        let pids: Vec<i32> = by_pid.iter().map(|p| p.pid).collect();
+        for w in pids.windows(2) {
+            assert!(w[0] <= w[1]);
+        }
+        let by_name = top_processes(&sys, &users, &mut prev, 1.0, "", 50, SortMode::Name);
+        let names: Vec<String> = by_name.iter().map(|p| p.name.to_lowercase()).collect();
+        for w in names.windows(2) {
+            assert!(w[0] <= w[1], "{} should sort before {}", w[0], w[1]);
+        }
+    }
+
+    #[test]
+    fn read_nice_self() {
+        let me = std::process::id() as i32;
+        let n = read_nice(me);
+        assert!(n.is_some(), "should read own nice value");
     }
 }

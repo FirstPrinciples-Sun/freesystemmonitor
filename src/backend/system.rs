@@ -127,7 +127,7 @@ impl SysState {
                 ));
             }
         }
-        mounts.sort_by(|a, b| b.2.cmp(&a.2));
+        mounts.sort_by_key(|a| std::cmp::Reverse(a.2));
         mounts.truncate(5);
         let mut disk_pct = 0.0f32;
         if best.0 > 0 {

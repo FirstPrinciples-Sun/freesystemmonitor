@@ -112,6 +112,11 @@ fn main() -> anyhow::Result<()> {
 
     let search_filter: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let search_filter_cb = search_filter.clone();
+    let sort_mode: Arc<Mutex<process::SortMode>> = Arc::new(Mutex::new(process::SortMode::Cpu));
+    let sort_mode_cb = sort_mode.clone();
+    let sel_pid: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+    let sel_pid_cb = sel_pid.clone();
+    let sel_pid_cb2 = sel_pid.clone();
 
     // ---- theme settings (persisted) ----
     let (accent_init, interval_init) = load_settings();
@@ -196,6 +201,52 @@ fn main() -> anyhow::Result<()> {
     {
         ui.on_search_changed(move |t| {
             *search_filter_cb.lock().unwrap() = t.to_string();
+        });
+    }
+    {
+        let w = weak.clone();
+        ui.on_set_sort(move |name| {
+            let mode = process::SortMode::from_str(&name);
+            *sort_mode_cb.lock().unwrap() = mode;
+            let idx = mode.index();
+            let label = name.to_string();
+            let _ = w.upgrade_in_event_loop(move |ui| {
+                ui.set_sort_idx(idx);
+                ui.set_sort_name(to_shared(label));
+            });
+        });
+    }
+    {
+        let w = weak.clone();
+        ui.on_select_process(move |pid, name| {
+            *sel_pid_cb.lock().unwrap() = pid;
+            let nice = process::read_nice(pid).unwrap_or(0);
+            let name = name.to_string();
+            let _ = w.upgrade_in_event_loop(move |ui| {
+                ui.set_sel_pid(pid);
+                ui.set_sel_name(to_shared(name));
+                ui.set_sel_nice(nice);
+            });
+        });
+    }
+    {
+        let w = weak.clone();
+        ui.on_nice_delta(move |d| {
+            let pid = *sel_pid_cb2.lock().unwrap();
+            if pid <= 0 {
+                return;
+            }
+            let cur = process::read_nice(pid).unwrap_or(0);
+            match process::renice(pid, cur + d) {
+                Ok(_) => {
+                    let nice = process::read_nice(pid).unwrap_or(cur + d);
+                    let _ = w.upgrade_in_event_loop(move |ui| {
+                        ui.set_sel_nice(nice);
+                        ui.set_status_msg(to_shared(format!("{pid} nice → {nice}")));
+                    });
+                }
+                Err(e) => set_status(&w, format!("priority failed: {e:#}")),
+            }
         });
     }
 
@@ -290,8 +341,9 @@ fn main() -> anyhow::Result<()> {
             let secs = (*interval.lock().unwrap_or_else(|e| e.into_inner())).max(1);
             let snap = st.snapshot();
             let filter = search_filter.lock().unwrap().clone();
+            let sort = *sort_mode.lock().unwrap();
             let procs =
-                process::top_processes(&st.sys, &users, &mut prev_disk, secs as f32, &filter, 100);
+                process::top_processes(&st.sys, &users, &mut prev_disk, secs as f32, &filter, 100, sort);
             let cores = st.core_usages();
             let temp = sensors::cpu_temp();
             let batt = if tick.is_multiple_of(5) {
