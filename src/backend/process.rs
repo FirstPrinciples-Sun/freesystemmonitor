@@ -111,7 +111,9 @@ pub fn top_processes(
     // sort by the selected column
     match sort {
         SortMode::Cpu => v.sort_by(|a, b| {
-            b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal)
+            b.cpu
+                .partial_cmp(&a.cpu)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }),
         SortMode::Mem => v.sort_by(|a, b| {
             b.mem_mb
@@ -167,7 +169,10 @@ pub fn read_nice(pid: i32) -> Option<i32> {
         .args(["-o", "ni=", "-p", &pid.to_string()])
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse::<i32>().ok()
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<i32>()
+        .ok()
 }
 
 fn fmt_rate(kbps: f32) -> String {

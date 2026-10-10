@@ -24,11 +24,18 @@ pub fn analyze(tail: &str) -> (i32, i32, i32) {
     (err, warn, total)
 }
 
-pub fn tail_logs() -> String {
-    for args in [
-        vec!["--user", "-n", "200", "--no-pager", "-e"],
-        vec!["-n", "200", "--no-pager", "-e"],
-    ] {
+/// level: 0 = all, 1 = warnings and above, 2 = errors and above.
+pub fn tail_logs_level(level: i32) -> String {
+    let mut extra: Vec<&str> = vec![];
+    if level == 1 {
+        extra = vec!["-p", "warning"];
+    } else if level >= 2 {
+        extra = vec!["-p", "err"];
+    }
+    for scope in [vec!["--user"], vec![]] {
+        let mut args = scope.clone();
+        args.extend_from_slice(&extra);
+        args.extend_from_slice(&["-n", "200", "--no-pager", "-e"]);
         if let Ok(o) = std::process::Command::new("journalctl")
             .args(&args)
             .output()

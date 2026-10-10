@@ -126,17 +126,18 @@ pub fn gpu_name() -> String {
     "Unknown GPU".into()
 }
 
-/// NVIDIA dedicated GPU info (single nvidia-smi call): (name, usage%, temp°C).
+/// NVIDIA dedicated GPU info (single nvidia-smi call): name, usage%, temp°C, VRAM.
 pub struct GpuInfo {
     pub name: String,
     pub usage: f32,
     pub temp: f32,
+    pub vram: String,
 }
 
 pub fn nvidia_info() -> Option<GpuInfo> {
     let o = std::process::Command::new("nvidia-smi")
         .args([
-            "--query-gpu=name,utilization.gpu,temperature.gpu",
+            "--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ])
         .output()
@@ -144,15 +145,26 @@ pub fn nvidia_info() -> Option<GpuInfo> {
     if !o.status.success() {
         return None;
     }
-    let line = String::from_utf8_lossy(&o.stdout).lines().next()?.to_string();
+    let line = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .next()?
+        .to_string();
     let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-    if parts.len() < 3 {
+    if parts.len() < 5 {
         return None;
     }
+    let used: f64 = parts[3].parse().unwrap_or(0.0);
+    let total: f64 = parts[4].parse().unwrap_or(0.0);
+    let vram = if total > 0.0 {
+        format!("{:.1} / {:.0} GB VRAM", used / 1024.0, total / 1024.0)
+    } else {
+        String::new()
+    };
     Some(GpuInfo {
         name: parts[0].to_string(),
         usage: parts[1].parse::<f32>().unwrap_or(-1.0),
         temp: parts[2].parse::<f32>().unwrap_or(-273.0),
+        vram,
     })
 }
 
@@ -175,8 +187,7 @@ pub fn intel_gpu() -> Option<IntelGpu> {
         .collect();
     cards.sort_by_key(|e| e.file_name());
     for c in cards {
-        let vendor =
-            std::fs::read_to_string(c.path().join("device/vendor")).unwrap_or_default();
+        let vendor = std::fs::read_to_string(c.path().join("device/vendor")).unwrap_or_default();
         if vendor.trim() != "0x8086" {
             continue;
         }
@@ -185,7 +196,11 @@ pub fn intel_gpu() -> Option<IntelGpu> {
                 .ok()
                 .and_then(|t| t.trim().parse::<f32>().ok())
         };
-        let (act, max, min) = (read("gt_act_freq_mhz")?, read("gt_max_freq_mhz")?, read("gt_min_freq_mhz")?);
+        let (act, max, min) = (
+            read("gt_act_freq_mhz")?,
+            read("gt_max_freq_mhz")?,
+            read("gt_min_freq_mhz")?,
+        );
         if max <= min {
             return None;
         }
@@ -202,7 +217,10 @@ pub fn intel_gpu() -> Option<IntelGpu> {
 /// Tries NVIDIA (nvidia-smi), then AMD (amdgpu busy_percent sysfs).
 pub fn gpu_usage() -> Option<f32> {
     if let Ok(o) = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
     {
         if o.status.success() {

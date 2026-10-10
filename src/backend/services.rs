@@ -30,6 +30,29 @@ fn unescape_unit(s: &str) -> String {
     out
 }
 
+fn parse_units(txt: &str) -> Vec<SvcInfo> {
+    let mut v = Vec::new();
+    for line in txt.lines().take(120) {
+        // lines may start with "● " (failed) or whitespace
+        let line = line.trim_start_matches(['●', '*', ' ', '\t']);
+        // UNIT LOAD ACTIVE SUB DESCRIPTION
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4 && parts[0].ends_with(".service") {
+            v.push(SvcInfo {
+                name: unescape_unit(parts[0]),
+                desc: if parts.len() > 4 {
+                    parts[4..].join(" ")
+                } else {
+                    String::new()
+                },
+                state: parts[3].to_string(),
+                active: parts[2] == "active",
+            });
+        }
+    }
+    v
+}
+
 pub fn list_user_services() -> Vec<SvcInfo> {
     let out = std::process::Command::new("systemctl")
         .args([
@@ -63,29 +86,6 @@ pub fn list_user_services() -> Vec<SvcInfo> {
     v
 }
 
-fn parse_units(txt: &str) -> Vec<SvcInfo> {
-    let mut v = Vec::new();
-    for line in txt.lines().take(120) {
-        // lines may start with "● " (failed) or whitespace
-        let line = line.trim_start_matches(['●', '*', ' ', '\t']);
-        // UNIT LOAD ACTIVE SUB DESCRIPTION
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 4 && parts[0].ends_with(".service") {
-            v.push(SvcInfo {
-                name: unescape_unit(parts[0]),
-                desc: if parts.len() > 4 {
-                    parts[4..].join(" ")
-                } else {
-                    String::new()
-                },
-                state: parts[3].to_string(),
-                active: parts[2] == "active",
-            });
-        }
-    }
-    v
-}
-
 pub fn service_action(name: &str, action: &str) -> anyhow::Result<String> {
     // try --user first, then system (may need polkit)
     let r = std::process::Command::new("systemctl")
@@ -102,4 +102,45 @@ pub fn service_action(name: &str, action: &str) -> anyhow::Result<String> {
     } else {
         anyhow::bail!("{}", String::from_utf8_lossy(&r2.stderr).trim())
     }
+}
+
+/// Raw `systemctl list-timers` lines (columns contain spaces, so we show
+/// them verbatim instead of fragile parsing). Empty when unavailable.
+pub fn list_timers() -> Vec<String> {
+    let out = std::process::Command::new("systemctl")
+        .args(["list-timers", "--all", "--no-legend", "--no-pager"])
+        .output();
+    let mut v = vec![];
+    if let Ok(o) = out {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines().take(14) {
+                let t = line.trim();
+                if t.is_empty() || t.starts_with("NEXT") {
+                    continue;
+                }
+                v.push(t.to_string());
+            }
+        }
+    }
+    if v.is_empty() {
+        // user timers as fallback
+        if let Ok(o) = std::process::Command::new("systemctl")
+            .args([
+                "--user",
+                "list-timers",
+                "--all",
+                "--no-legend",
+                "--no-pager",
+            ])
+            .output()
+        {
+            for line in String::from_utf8_lossy(&o.stdout).lines().take(14) {
+                let t = line.trim();
+                if !t.is_empty() {
+                    v.push(t.to_string());
+                }
+            }
+        }
+    }
+    v
 }

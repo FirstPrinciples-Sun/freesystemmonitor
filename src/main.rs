@@ -1,6 +1,8 @@
 mod backend;
 
-use backend::{alerts, apps, autostart, cleaner, icons, logs, process, sensors, services, system};
+use backend::{
+    alerts, apps, autostart, cleaner, hw, icons, logs, process, sensors, services, system,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -117,6 +119,9 @@ fn main() -> anyhow::Result<()> {
     let sel_pid: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
     let sel_pid_cb = sel_pid.clone();
     let sel_pid_cb2 = sel_pid.clone();
+    let log_level: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+    let log_level_cb = log_level.clone();
+    let log_level_cb2 = log_level.clone();
 
     // ---- theme settings (persisted) ----
     let (accent_init, interval_init) = load_settings();
@@ -297,8 +302,29 @@ fn main() -> anyhow::Result<()> {
     }
     {
         let w = weak.clone();
+        ui.on_set_governor(move |gov| match hw::set_governor(gov.as_ref()) {
+            Ok(m) => {
+                set_status(&w, m);
+                refresh_governor_ui(&w);
+            }
+            Err(e) => set_status(&w, format!("governor: {e:#}")),
+        });
+    }
+    {
+        let w = weak.clone();
+        ui.on_set_log_level(move |lvl| {
+            *log_level_cb.lock().unwrap() = lvl;
+            let _ = w.upgrade_in_event_loop(move |ui| {
+                ui.set_log_level(lvl);
+            });
+            refresh_logs_ui(&w, lvl);
+        });
+    }
+    {
+        let w = weak.clone();
         ui.on_refresh_logs(move || {
-            refresh_logs_ui(&w);
+            let lvl = *log_level_cb2.lock().unwrap();
+            refresh_logs_ui(&w, lvl);
         });
     }
     {
@@ -314,10 +340,13 @@ fn main() -> anyhow::Result<()> {
 
     // ---- static/slow data first paint ----
     refresh_services_ui(&weak);
+    refresh_timers_ui(&weak);
     refresh_autostart_ui(&weak);
     refresh_apps_ui(&weak);
     refresh_cleaner_ui(&weak);
-    refresh_logs_ui(&weak);
+    refresh_logs_ui(&weak, 0);
+    refresh_sensors_ui(&weak);
+    refresh_governor_ui(&weak);
 
     // ---- 1s polling thread (interval is customizable) ----
     std::thread::spawn(move || {
@@ -339,11 +368,18 @@ fn main() -> anyhow::Result<()> {
         let mut nu_hist: VecDeque<f32> = VecDeque::from(vec![0.0; 60]);
         loop {
             let secs = (*interval.lock().unwrap_or_else(|e| e.into_inner())).max(1);
-            let snap = st.snapshot();
+            let snap = st.snapshot(secs as f32);
             let filter = search_filter.lock().unwrap().clone();
             let sort = *sort_mode.lock().unwrap();
-            let procs =
-                process::top_processes(&st.sys, &users, &mut prev_disk, secs as f32, &filter, 100, sort);
+            let procs = process::top_processes(
+                &st.sys,
+                &users,
+                &mut prev_disk,
+                secs as f32,
+                &filter,
+                100,
+                sort,
+            );
             let cores = st.core_usages();
             let temp = sensors::cpu_temp();
             let batt = if tick.is_multiple_of(5) {
@@ -396,9 +432,11 @@ fn main() -> anyhow::Result<()> {
                     };
                     let name = info.name.clone();
                     let sub = last_gpu_sub.clone();
+                    let vram = info.vram.clone();
                     let _ = weak.upgrade_in_event_loop(move |ui| {
                         ui.set_gpu_name(to_shared(name));
                         ui.set_gpu_sub(to_shared(sub));
+                        ui.set_gpu_vram(to_shared(vram));
                     });
                 } else if let Some(v) = sensors::gpu_usage() {
                     last_gpu_use = v;
@@ -414,11 +452,7 @@ fn main() -> anyhow::Result<()> {
             let intel_use_now = last_intel_use;
             let intel_sub_now = last_intel_sub.clone();
             // alerts with rising-edge desktop notifications
-            let temp_c = temp
-                .trim_end_matches("°C")
-                .trim()
-                .parse::<i64>()
-                .ok();
+            let temp_c = temp.trim_end_matches("°C").trim().parse::<i64>().ok();
             let found = alerts::evaluate(&alerts::AlertInput {
                 cpu: snap.cpu_usage,
                 mem_pct: pct(snap.mem_used_gb, snap.mem_total_gb),
@@ -447,7 +481,12 @@ fn main() -> anyhow::Result<()> {
                 .iter()
                 .map(|(mp, used, total)| {
                     let pct = (*used as f32 / *total as f32 * 100.0).clamp(0.0, 100.0);
-                    (mp.clone(), system::fmt_bytes(*used), system::fmt_bytes(*total), pct)
+                    (
+                        mp.clone(),
+                        system::fmt_bytes(*used),
+                        system::fmt_bytes(*total),
+                        pct,
+                    )
                 })
                 .collect::<Vec<_>>();
             // resolve process icon paths (Strings cross threads; images load on UI thread)
@@ -456,10 +495,7 @@ fn main() -> anyhow::Result<()> {
                 if proc_icon_paths.contains_key(&p.pid) {
                     continue;
                 }
-                proc_icon_paths.insert(
-                    p.pid,
-                    icon_db.find(&p.icon_key).map(|s| s.to_string()),
-                );
+                proc_icon_paths.insert(p.pid, icon_db.find(&p.icon_key).map(|s| s.to_string()));
             }
 
             let res = weak.upgrade_in_event_loop(move |ui| {
@@ -549,6 +585,51 @@ fn main() -> anyhow::Result<()> {
                 ui.set_netdown_hist(std::rc::Rc::new(slint::VecModel::from(ndh)).into());
                 ui.set_netup_hist(std::rc::Rc::new(slint::VecModel::from(nuh)).into());
                 ui.set_net_rate(to_shared(net_rate));
+                let ifmax = snap
+                    .ifaces
+                    .iter()
+                    .map(|i| i.rx_kbps + i.tx_kbps)
+                    .fold(0.0f64, f64::max)
+                    .max(1.0);
+                let ifrows: Vec<IfRow> = snap
+                    .ifaces
+                    .iter()
+                    .map(|i| IfRow {
+                        name: to_shared(i.name.clone()),
+                        info: to_shared(format!(
+                            "↓{} ↑{} · {}",
+                            io_rate(i.rx_kbps),
+                            io_rate(i.tx_kbps),
+                            if i.ip.is_empty() {
+                                "no IP".into()
+                            } else {
+                                i.ip.clone()
+                            }
+                        )),
+                        pct: ((i.rx_kbps + i.tx_kbps) / ifmax * 100.0).clamp(0.0, 100.0) as f32,
+                    })
+                    .collect();
+                let ifn = ifrows.len() as i32;
+                ui.set_ifaces(std::rc::Rc::new(slint::VecModel::from(ifrows)).into());
+                ui.set_if_tot(ifn);
+                let diomax = snap
+                    .diskio
+                    .iter()
+                    .map(|d| d.r_kbps + d.w_kbps)
+                    .fold(0.0f64, f64::max)
+                    .max(1.0);
+                let diorows: Vec<DiskIoRow> = snap
+                    .diskio
+                    .iter()
+                    .map(|d| DiskIoRow {
+                        dev: to_shared(d.dev.clone()),
+                        info: to_shared(format!("↓{} ↑{}", io_rate(d.r_kbps), io_rate(d.w_kbps))),
+                        pct: ((d.r_kbps + d.w_kbps) / diomax * 100.0).clamp(0.0, 100.0) as f32,
+                    })
+                    .collect();
+                let dion = diorows.len() as i32;
+                ui.set_diskio(std::rc::Rc::new(slint::VecModel::from(diorows)).into());
+                ui.set_dio_tot(dion);
                 let (ca, cl, cly) = area_cmds(&ch);
                 ui.set_cpu_area(to_shared(ca));
                 ui.set_cpu_line(to_shared(cl));
@@ -566,6 +647,9 @@ fn main() -> anyhow::Result<()> {
                 break; // window closed
             }
             tick += 1;
+            if tick.is_multiple_of(10) {
+                refresh_sensors_ui(&weak);
+            }
             std::thread::sleep(Duration::from_secs(secs));
         }
     });
@@ -604,6 +688,16 @@ fn pct(used: f32, total: f32) -> f32 {
         0.0
     } else {
         (used / total * 100.0).clamp(0.0, 100.0)
+    }
+}
+
+fn io_rate(kbps: f64) -> String {
+    if kbps < 0.5 {
+        "—".into()
+    } else if kbps < 1024.0 {
+        format!("{kbps:.0} KB/s")
+    } else {
+        format!("{:.1} MB/s", kbps / 1024.0)
     }
 }
 
@@ -693,13 +787,49 @@ fn refresh_cleaner_ui(weak: &slint::Weak<AppWindow>) {
     });
 }
 
-fn refresh_logs_ui(weak: &slint::Weak<AppWindow>) {
-    let txt = logs::tail_logs();
+fn refresh_logs_ui(weak: &slint::Weak<AppWindow>, level: i32) {
+    let txt = logs::tail_logs_level(level);
     let (err, warn, tot) = logs::analyze(&txt);
     let _ = weak.upgrade_in_event_loop(move |ui| {
         ui.set_logs_text(to_shared(txt));
         ui.set_log_err(err);
         ui.set_log_warn(warn);
         ui.set_log_tot(tot);
+    });
+}
+
+fn refresh_timers_ui(weak: &slint::Weak<AppWindow>) {
+    let lines = services::list_timers();
+    let n = lines.len() as i32;
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        let rows: Vec<slint::SharedString> = lines.into_iter().map(to_shared).collect();
+        ui.set_timers(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        ui.set_tim_tot(n);
+    });
+}
+
+fn refresh_sensors_ui(weak: &slint::Weak<AppWindow>) {
+    let items = hw::read_sensors();
+    let n = items.len() as i32;
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        let rows: Vec<SensorRow> = items
+            .iter()
+            .map(|s| SensorRow {
+                label: to_shared(s.label.clone()),
+                info: to_shared(s.info.clone()),
+                pct: s.pct,
+            })
+            .collect();
+        ui.set_sensorsr(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        ui.set_sen_tot(n);
+    });
+}
+
+fn refresh_governor_ui(weak: &slint::Weak<AppWindow>) {
+    let gov = hw::read_governor();
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        ui.set_gov_cur(to_shared(gov.current));
+        let rows: Vec<slint::SharedString> = gov.available.into_iter().map(to_shared).collect();
+        ui.set_gov_avail(std::rc::Rc::new(slint::VecModel::from(rows)).into());
     });
 }

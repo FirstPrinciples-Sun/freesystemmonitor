@@ -2,6 +2,7 @@ pub mod alerts;
 pub mod apps;
 pub mod autostart;
 pub mod cleaner;
+pub mod hw;
 pub mod icons;
 pub mod logs;
 pub mod process;

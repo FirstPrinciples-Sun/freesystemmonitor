@@ -32,7 +32,9 @@ impl IconDb {
         ];
         if let Ok(home) = std::env::var("HOME") {
             dirs.push(format!("{home}/.local/share/applications"));
-            dirs.push(format!("{home}/.local/share/flatpak/exports/share/applications"));
+            dirs.push(format!(
+                "{home}/.local/share/flatpak/exports/share/applications"
+            ));
         }
         // pass 1: collect (keys, icon-name) from desktop files
         let mut pending: Vec<(Vec<String>, String)> = vec![];
@@ -227,7 +229,6 @@ fn build_index(wanted: &HashSet<String>) -> HashMap<String, String> {
     }
     idx.into_iter().map(|(k, (p, _))| (k, p)).collect()
 }
-
 
 #[cfg(test)]
 mod tests {

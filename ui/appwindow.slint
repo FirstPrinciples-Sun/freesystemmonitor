@@ -50,6 +50,24 @@ struct MountRow {
     pct: float,
 }
 
+struct IfRow {
+    name: string,
+    info: string,
+    pct: float,
+}
+
+struct DiskIoRow {
+    dev: string,
+    info: string,
+    pct: float,
+}
+
+struct SensorRow {
+    label: string,
+    info: string,
+    pct: float,
+}
+
 // ---- gradient usage bar ----
 component GBar inherits Rectangle {
     in property <float> pct;
@@ -394,6 +412,18 @@ export component AppWindow inherits Window {
     in-out property <bool> batt-charging: false;
     in-out property <color> area-fill: #3daee92e;
     in-out property <[MountRow]> mounts;
+    in-out property <[IfRow]> ifaces;
+    in-out property <[DiskIoRow]> diskio;
+    in-out property <[SensorRow]> sensorsr;
+    in-out property <[string]> timers;
+    in-out property <int> tim-tot: 0;
+    in-out property <[string]> gov-avail;
+    in-out property <string> gov-cur: "unknown";
+    in-out property <int> log-level: 0;
+    in-out property <string> gpu-vram: "";
+    in-out property <int> if-tot: 0;
+    in-out property <int> dio-tot: 0;
+    in-out property <int> sen-tot: 0;
     in-out property <[SizeRow]> size-rows;
     in-out property <int> log-err: 0;
     in-out property <int> log-warn: 0;
@@ -427,6 +457,8 @@ export component AppWindow inherits Window {
     callback uninstall-app(string);
     callback set-accent(string);
     callback set-interval(int);
+    callback set-governor(string);
+    callback set-log-level(int);
 
     HorizontalLayout {
         spacing: 0px;
@@ -569,6 +601,7 @@ export component AppWindow inherits Window {
                             }
                             CardTitle { text: "NVIDIA GPU"; horizontal-alignment: center; }
                             Dim { text: gpu-name; horizontal-alignment: center; }
+                            Dim { text: gpu-vram; horizontal-alignment: center; visible: gpu-vram != ""; }
                             Dim { text: gpu-sub; horizontal-alignment: center; }
                         }
                         Card {
@@ -630,6 +663,11 @@ export component AppWindow inherits Window {
                             GlowNum { label: "🌡  " + cpu-temp; glow: accent2; }
                             Dim { text: "up " + uptime + "  ·  load " + load-avg; }
                             Dim { text: "🔋  " + battery; }
+                            Dim { text: "CPU governor: " + gov-cur; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                for g in gov-avail: Button { text: g; primary: g == gov-cur; clicked => { set-governor(g); } }
+                            }
                         }
                         Card {
                             horizontal-stretch: 1;
@@ -756,6 +794,45 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    Card {
+                        CardTitle { text: "Disks · live I/O"; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            for d in diskio: HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: d.dev; width: 90px; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                GBar { pct: d.pct; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                Text { text: d.info; width: 170px; color: #9aa0a6; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+                        Dim { text: "No block devices found"; visible: dio-tot == 0; }
+                    }
+                    Card {
+                        CardTitle { text: "Network interfaces · live"; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            for n in ifaces: HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: n.name; width: 90px; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                GBar { pct: n.pct; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                Text { text: n.info; width: 250px; overflow: elide; color: #9aa0a6; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+                        Dim { text: "No non-loopback interfaces"; visible: if-tot == 0; }
+                    }
+                    Card {
+                        CardTitle { text: "Sensors · temperatures & fans"; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            for s in sensorsr: HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: s.label; width: 220px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                GBar { pct: s.pct; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                Text { text: s.info; width: 80px; color: #9aa0a6; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+                        Dim { text: "No hwmon sensors readable"; visible: sen-tot == 0; }
+                    }
                 }
 
                 // ---- PAGE 3 : SERVICES ----
@@ -793,6 +870,14 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
+                    }
+                    Card {
+                        CardTitle { text: "Timers · upcoming systemd jobs"; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            for t in timers: Dim { text: t; }
+                        }
+                        Dim { text: "No timers found"; visible: tim-tot == 0; }
                     }
                 }
 
@@ -893,6 +978,14 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Text { text: "Logs"; color: #ffffff; font-size: 24px; font-weight: 800; horizontal-stretch: 1; vertical-alignment: center; }
+                        ComboBox {
+                            model: ["Everything", "Warnings+", "Errors only"];
+                            current-index <=> log-level;
+                            selected(value) => {
+                                if value == "Warnings+" { set-log-level(1); } else if value == "Errors only" { set-log-level(2); } else { set-log-level(0); }
+                            }
+                            width: 140px;
+                        }
                         Button { text: "↻ Refresh"; clicked => { refresh-logs(); } }
                     }
                     Dim { text: "Last 200 journal lines · errors and warnings counted locally"; }

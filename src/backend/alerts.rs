@@ -22,13 +22,22 @@ pub struct AlertInput {
 
 pub fn evaluate(inp: &AlertInput) -> Vec<Alert> {
     let mut out = vec![];
-    let mut push = |key: &'static str, crit_at: f32, warn_at: f32, v: f32, fmt: &dyn Fn(f32) -> String| {
-        if v >= crit_at {
-            out.push(Alert { key, critical: true, text: fmt(v) });
-        } else if v >= warn_at {
-            out.push(Alert { key, critical: false, text: fmt(v) });
-        }
-    };
+    let mut push =
+        |key: &'static str, crit_at: f32, warn_at: f32, v: f32, fmt: &dyn Fn(f32) -> String| {
+            if v >= crit_at {
+                out.push(Alert {
+                    key,
+                    critical: true,
+                    text: fmt(v),
+                });
+            } else if v >= warn_at {
+                out.push(Alert {
+                    key,
+                    critical: false,
+                    text: fmt(v),
+                });
+            }
+        };
     push("cpu", 90.0, 75.0, inp.cpu, &|v| format!("CPU at {v:.0}%"));
     push("mem", 90.0, 75.0, inp.mem_pct, &|v| {
         format!("Memory at {v:.0}%")
@@ -59,7 +68,13 @@ mod tests {
     use super::*;
 
     fn quiet() -> AlertInput {
-        AlertInput { cpu: 10.0, mem_pct: 40.0, disk_pct: 35.0, swap_pct: 0.0, temp_c: Some(50) }
+        AlertInput {
+            cpu: 10.0,
+            mem_pct: 40.0,
+            disk_pct: 35.0,
+            swap_pct: 0.0,
+            temp_c: Some(50),
+        }
     }
 
     #[test]
@@ -69,7 +84,13 @@ mod tests {
 
     #[test]
     fn thresholds_and_levels() {
-        let a = evaluate(&AlertInput { cpu: 95.0, mem_pct: 80.0, disk_pct: 91.0, swap_pct: 0.0, temp_c: Some(85) });
+        let a = evaluate(&AlertInput {
+            cpu: 95.0,
+            mem_pct: 80.0,
+            disk_pct: 91.0,
+            swap_pct: 0.0,
+            temp_c: Some(85),
+        });
         let crit: Vec<&str> = a.iter().filter(|x| x.critical).map(|x| x.key).collect();
         let warn: Vec<&str> = a.iter().filter(|x| !x.critical).map(|x| x.key).collect();
         assert!(crit.contains(&"cpu"));

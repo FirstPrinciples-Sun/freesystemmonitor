@@ -21,8 +21,25 @@ pub struct Snapshot {
     pub disk_stat: String,
     pub disk_pct: f32,
     pub mounts: Vec<(String, u64, u64)>,
+    pub ifaces: Vec<IfInfo>,
+    pub diskio: Vec<DiskIo>,
     pub cpu_freq: String,
     pub mem_free_gb: f32,
+}
+
+#[derive(Clone)]
+pub struct IfInfo {
+    pub name: String,
+    pub rx_kbps: f64,
+    pub tx_kbps: f64,
+    pub ip: String,
+}
+
+#[derive(Clone)]
+pub struct DiskIo {
+    pub dev: String,
+    pub r_kbps: f64,
+    pub w_kbps: f64,
 }
 
 pub struct SysState {
@@ -31,6 +48,8 @@ pub struct SysState {
     pub disks: Disks,
     pub prev_rx: u64,
     pub prev_tx: u64,
+    pub prev_if: HashMap<String, (u64, u64)>,
+    pub prev_dio: HashMap<String, (u64, u64)>,
 }
 
 impl SysState {
@@ -45,10 +64,13 @@ impl SysState {
             disks,
             prev_rx: 0,
             prev_tx: 0,
+            prev_if: HashMap::new(),
+            prev_dio: HashMap::new(),
         }
     }
 
-    pub fn snapshot(&mut self) -> Snapshot {
+    pub fn snapshot(&mut self, secs: f32) -> Snapshot {
+        let secs = secs.max(0.5) as f64;
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
         self.sys
@@ -94,8 +116,8 @@ impl SysState {
             rx += n.total_received();
             tx += n.total_transmitted();
         }
-        let rx_rate = rx.saturating_sub(self.prev_rx) as f64 / 1024.0;
-        let tx_rate = tx.saturating_sub(self.prev_tx) as f64 / 1024.0;
+        let rx_rate = rx.saturating_sub(self.prev_rx) as f64 / 1024.0 / secs;
+        let tx_rate = tx.saturating_sub(self.prev_tx) as f64 / 1024.0 / secs;
         self.prev_rx = rx;
         self.prev_tx = tx;
         let net_stat = format!(
@@ -105,6 +127,77 @@ impl SysState {
             fmt_bytes(rx),
             fmt_bytes(tx)
         );
+
+        // per-interface rates + first IP
+        let mut ifaces: Vec<IfInfo> = vec![];
+        for (name, n) in self.networks.iter() {
+            if name == "lo" {
+                continue;
+            }
+            let (tr, tt) = (n.total_received(), n.total_transmitted());
+            let (pr, pt) = self.prev_if.get(name).copied().unwrap_or((tr, tt));
+            self.prev_if.insert(name.clone(), (tr, tt));
+            let ip = n
+                .ip_networks()
+                .iter()
+                .find_map(|ipn| {
+                    let s = format!("{}", ipn.addr);
+                    if s.starts_with("127.") || s == "::1" {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                })
+                .unwrap_or_default();
+            ifaces.push(IfInfo {
+                name: name.clone(),
+                rx_kbps: tr.saturating_sub(pr) as f64 / 1024.0 / secs,
+                tx_kbps: tt.saturating_sub(pt) as f64 / 1024.0 / secs,
+                ip,
+            });
+        }
+        ifaces.sort_by(|a, b| {
+            (b.rx_kbps + b.tx_kbps)
+                .partial_cmp(&(a.rx_kbps + a.tx_kbps))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // per-device disk I/O from /proc/diskstats (sectors are 512 B)
+        let mut diskio: Vec<DiskIo> = vec![];
+        if let Ok(txt) = std::fs::read_to_string("/proc/diskstats") {
+            for line in txt.lines() {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                if f.len() < 14 {
+                    continue;
+                }
+                let dev = f[2];
+                if dev.starts_with("loop")
+                    || dev.starts_with("ram")
+                    || dev.starts_with("zram")
+                    || dev.starts_with("fd")
+                    || dev.starts_with("sr")
+                {
+                    continue;
+                }
+                let (rs, ws) = (
+                    f[5].parse::<u64>().unwrap_or(0),
+                    f[9].parse::<u64>().unwrap_or(0),
+                );
+                let (pr, pw) = self.prev_dio.get(dev).copied().unwrap_or((rs, ws));
+                self.prev_dio.insert(dev.to_string(), (rs, ws));
+                diskio.push(DiskIo {
+                    dev: dev.to_string(),
+                    r_kbps: rs.saturating_sub(pr) as f64 * 0.5 / secs,
+                    w_kbps: ws.saturating_sub(pw) as f64 * 0.5 / secs,
+                });
+            }
+        }
+        diskio.sort_by(|a, b| {
+            (b.r_kbps + b.w_kbps)
+                .partial_cmp(&(a.r_kbps + a.w_kbps))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        diskio.truncate(6);
 
         // disk usage: biggest mount + full list for the Storage card
         let mut disk_stat = String::from("—");
@@ -183,6 +276,8 @@ impl SysState {
             disk_stat,
             disk_pct,
             mounts,
+            ifaces,
+            diskio,
             cpu_freq,
             mem_free_gb,
         }
