@@ -1,0 +1,696 @@
+import { Button, LineEdit, CheckBox, ListView, ScrollView } from "std-widgets.slint";
+
+struct ProcRow {
+    name: string,
+    pid: int,
+    cpu: float,
+    mem: float,
+    mem_mb: float,
+    user: string,
+    status: string,
+    disk_str: string,
+}
+
+struct CoreRow {
+    label: string,
+    usage: float,
+}
+
+struct ServiceRow {
+    name: string,
+    desc: string,
+    state: string,
+    active: bool,
+}
+
+struct AutostartRow {
+    name: string,
+    file: string,
+    enabled: bool,
+}
+
+struct AppRow {
+    name: string,
+    id: string,
+    size: string,
+    origin: string,
+    pct: float,
+}
+
+struct SizeRow {
+    label: string,
+    info: string,
+    pct: float,
+}
+
+// ---- gradient usage bar ----
+component GBar inherits Rectangle {
+    in property <float> pct;
+    in property <color> a1;
+    in property <color> a2;
+    height: 9px;
+    background: #ffffff14;
+    border-radius: 5px;
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width * min(max(pct, 0) / 100, 1);
+        height: parent.height;
+        background: @linear-gradient(90deg, a1, a2);
+        border-radius: 5px;
+    }
+}
+
+// ---- 60-point history graph (bottom-anchored bars) ----
+component HistGraph inherits Rectangle {
+    in property <[float]> data;
+    in property <color> a1;
+    in property <color> a2;
+    in property <float> bw: 4;
+    in property <float> gap: 2;
+    in property <float> gh: 80;
+    height: gh * 1px;
+    HorizontalLayout {
+        spacing: gap * 1px;
+        for h in data: Rectangle {
+            width: bw * 1px;
+            height: gh * 1px;
+            Rectangle {
+                width: parent.width;
+                height: max(2px, (gh - 6) * 1px * h / 100);
+                y: parent.height - self.height;
+                background: @linear-gradient(0deg, a1, a2);
+                border-radius: 1px;
+                opacity: 0.85;
+            }
+        }
+    }
+}
+
+// ---- sidebar nav pill ----
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    in property <color> a1;
+    in property <color> a2;
+    callback tapped();
+    height: 38px;
+    border-radius: 11px;
+    background: active ? @linear-gradient(90deg, a1, a2) : #ffffff00;
+    HorizontalLayout {
+        padding-left: 14px;
+        Text {
+            text: label;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: active ? 700 : 400;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        clicked => { tapped(); }
+    }
+}
+
+// ---- accent swatch ----
+component Swatch inherits Rectangle {
+    in property <color> c1;
+    in property <color> c2;
+    in property <bool> selected;
+    callback picked();
+    width: 46px;
+    height: 46px;
+    border-radius: 23px;
+    background: @linear-gradient(135deg, c1, c2);
+    border-width: selected ? 3px : 0px;
+    border-color: #ffffff;
+    TouchArea {
+        clicked => { picked(); }
+    }
+}
+
+// ---- glass card ----
+component Card inherits Rectangle {
+    background: #ffffff0d;
+    border-width: 1px;
+    border-color: #ffffff1f;
+    border-radius: 16px;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #00000055;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        @children
+    }
+}
+
+component CardTitle inherits Text {
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+    overflow: elide;
+}
+
+component Dim inherits Text {
+    color: #9aa0a6;
+    font-size: 13px;
+    overflow: elide;
+}
+
+component Body inherits Text {
+    color: #dfe3ea;
+    font-size: 13px;
+    overflow: elide;
+}
+
+export component AppWindow inherits Window {
+    title: "FreeMon — System Monitor for KDE";
+    preferred-width: 1160px;
+    preferred-height: 720px;
+    min-width: 940px;
+    min-height: 580px;
+    background: @linear-gradient(135deg, #262b3a 0%, #161922 55%, #1c2130 100%);
+
+    // ---- navigation ----
+    in-out property <int> current-page: 0;
+    // ---- theme (customizable) ----
+    in-out property <color> accent1: #3daee9;
+    in-out property <color> accent2: #7b61ff;
+    in-out property <string> accent-name: "breeze";
+    in-out property <int> refresh-secs: 1;
+    // ---- system snapshot (updated from Rust) ----
+    in-out property <float> cpu-usage: 0;
+    in-out property <string> cpu-brand: "—";
+    in-out property <int> cpu-count: 1;
+    in-out property <float> mem-used-gb: 0;
+    in-out property <float> mem-total-gb: 1;
+    in-out property <float> mem-pct: 0;
+    in-out property <float> swap-used-gb: 0;
+    in-out property <float> swap-total-gb: 1;
+    in-out property <float> swap-pct: 0;
+    in-out property <string> load-avg: "—";
+    in-out property <string> uptime: "—";
+    in-out property <string> hostname: "—";
+    in-out property <string> kernel: "—";
+    in-out property <string> distro: "—";
+    in-out property <string> desktop: "—";
+    in-out property <string> gpu-name: "—";
+    in-out property <string> cpu-temp: "—";
+    in-out property <string> net-stat: "—";
+    in-out property <string> disk-stat: "—";
+    in-out property <string> battery: "—";
+    in-out property <string> clock: "—";
+    in-out property <string> status-msg: "Ready";
+    in-out property <int> proc-count: 0;
+
+    in-out property <[ProcRow]> processes;
+    in-out property <[CoreRow]> cores;
+    in-out property <[ServiceRow]> services;
+    in-out property <[AutostartRow]> autostart;
+    in-out property <[AppRow]> apps;
+    in-out property <[float]> cpu-hist;
+    in-out property <[float]> mem-hist;
+    in-out property <[float]> swap-hist;
+    in-out property <[float]> netdown-hist;
+    in-out property <[float]> netup-hist;
+    in-out property <string> net-rate: "—";
+    in-out property <[SizeRow]> size-rows;
+    in-out property <int> log-err: 0;
+    in-out property <int> log-warn: 0;
+    in-out property <int> log-tot: 0;
+    in-out property <int> svc-act: 0;
+    in-out property <int> svc-tot: 0;
+    in-out property <int> auto-act: 0;
+    in-out property <int> auto-tot: 0;
+    in-out property <int> app-tot: 0;
+    in-out property <string> logs-text: "";
+    in-out property <string> cleaner-info: "";
+    in-out property <string> search-text: "";
+
+    callback kill-process(int);
+    callback stop-process(int);
+    callback renice-process(int, int);
+    callback search-changed(string);
+    callback service-action(string, string);
+    callback refresh-services();
+    callback toggle-autostart(string, bool);
+    callback clean-kind(string);
+    callback refresh-logs();
+    callback uninstall-app(string);
+    callback set-accent(string);
+    callback set-interval(int);
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        // ===== Sidebar (frosted) =====
+        Rectangle {
+            width: 212px;
+            background: #00000038;
+            border-width: 1px;
+            border-color: #ffffff12;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 5px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 34px;
+                        height: 34px;
+                        border-radius: 10px;
+                        background: @linear-gradient(135deg, accent1, accent2);
+                        Text {
+                            text: "❄";
+                            color: #ffffff;
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 0px;
+                        Text { text: "FreeMon"; color: #ffffff; font-size: 18px; font-weight: 800; }
+                        Dim { text: "for KDE Plasma"; }
+                    }
+                }
+                Rectangle { height: 6px; }
+                Dim { text: clock; }
+                Rectangle { height: 6px; }
+                NavItem { label: "◉  Overview"; active: current-page == 0; a1: accent1; a2: accent2; tapped => { current-page = 0; } }
+                NavItem { label: "☰  Processes"; active: current-page == 1; a1: accent1; a2: accent2; tapped => { current-page = 1; } }
+                NavItem { label: "📈  Performance"; active: current-page == 2; a1: accent1; a2: accent2; tapped => { current-page = 2; } }
+                NavItem { label: "⚙  Services"; active: current-page == 3; a1: accent1; a2: accent2; tapped => { current-page = 3; } }
+                NavItem { label: "🚀  Startup"; active: current-page == 4; a1: accent1; a2: accent2; tapped => { current-page = 4; } }
+                NavItem { label: "📦  Apps"; active: current-page == 5; a1: accent1; a2: accent2; tapped => { current-page = 5; } }
+                NavItem { label: "🧹  Cleaner"; active: current-page == 6; a1: accent1; a2: accent2; tapped => { current-page = 6; } }
+                NavItem { label: "📜  Logs"; active: current-page == 7; a1: accent1; a2: accent2; tapped => { current-page = 7; } }
+                NavItem { label: "ℹ  About"; active: current-page == 8; a1: accent1; a2: accent2; tapped => { current-page = 8; } }
+                NavItem { label: "🎨  Theme"; active: current-page == 9; a1: accent1; a2: accent2; tapped => { current-page = 9; } }
+                Rectangle { vertical-stretch: 1; }
+                // status pill
+                Rectangle {
+                    height: 34px;
+                    border-radius: 10px;
+                    background: #ffffff0d;
+                    border-width: 1px;
+                    border-color: #ffffff14;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 8px; height: 8px; border-radius: 4px;
+                            background: @linear-gradient(135deg, accent1, accent2);
+                        }
+                        Text {
+                            text: "CPU " + round(cpu-usage) + "% · " + proc-count + " procs";
+                            color: #cfd4dc;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===== Main (scrolls vertically on short windows) =====
+        ScrollView {
+            VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+
+                // ---- PAGE 0 : OVERVIEW ----
+                if current-page == 0 : VerticalLayout {
+                    spacing: 12px;
+                    Text { text: "Overview"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "CPU — " + cpu-brand; }
+                            Text { text: round(cpu-usage) + "%  ·  " + cpu-count + " threads  ·  " + cpu-temp; color: #ffffff; font-size: 20px; font-weight: 700; }
+                            GBar { pct: cpu-usage; a1: accent1; a2: accent2; }
+                            Dim { text: "load " + load-avg + "  ·  up " + uptime; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Memory"; }
+                            Text { text: mem-used-gb + " / " + mem-total-gb + " GB"; color: #ffffff; font-size: 20px; font-weight: 700; }
+                            GBar { pct: mem-pct; a1: accent1; a2: accent2; }
+                            Dim { text: "Swap " + swap-used-gb + " / " + swap-total-gb + " GB (" + round(swap-pct) + "%)"; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "CPU history · 60s"; }
+                            HistGraph { data: cpu-hist; a1: accent1; a2: accent2; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Memory history · 60s"; }
+                            HistGraph { data: mem-hist; a1: accent1; a2: accent2; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Swap history · 60s — " + swap-used-gb + " / " + swap-total-gb + " GB"; }
+                            HistGraph { data: swap-hist; a1: accent1; a2: accent2; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Network · " + net-rate; }
+                            Dim { text: "▼ download (scale 10 MB/s)"; }
+                            HistGraph { data: netdown-hist; a1: accent1; a2: accent2; bw: 2; gap: 1; gh: 40; }
+                            Dim { text: "▲ upload"; }
+                            HistGraph { data: netup-hist; a1: accent2; a2: #ffffff; bw: 2; gap: 1; gh: 40; }
+                            Dim { text: net-stat; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Power"; }
+                            Body { text: "🔋  " + battery; }
+                            Dim { text: "up " + uptime; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "Storage & Graphics"; }
+                            Body { text: "💾  " + disk-stat; }
+                            Body { text: "🎮  " + gpu-name; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            CardTitle { text: "System"; }
+                            Body { text: "🖥  " + hostname; }
+                            Body { text: "🐧  " + kernel; }
+                            Dim { text: distro + " · " + desktop; }
+                        }
+                    }
+                }
+
+                // ---- PAGE 1 : PROCESSES ----
+                if current-page == 1 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Processes (" + proc-count + ")"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Dim { text: "Top 100 by CPU · Stop sends SIGTERM, Kill sends SIGKILL"; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 8px;
+                            search := LineEdit {
+                                placeholder-text: "Search process or PID…";
+                                text <=> search-text;
+                                edited => { search-changed(self.text); }
+                                horizontal-stretch: 1;
+                            }
+                            Button { text: "Clear"; clicked => { search.text = ""; search-changed(""); } }
+                        }
+                        HistGraph { data: cpu-hist; a1: accent1; a2: accent2; bw: 3; gap: 1; gh: 34; }
+                    }
+                    Card {
+                        Dim { text: "PID        NAME                         CPU          MEM           DISK           USER"; }
+                        Rectangle { height: 1px; background: #ffffff14; }
+                        ListView {
+                            height: 420px;
+                            for p[i] in processes: Rectangle {
+                                height: 36px;
+                                background: Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00;
+                                border-radius: 8px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    padding-left: 8px;
+                                    padding-right: 4px;
+                                    Text { text: p.pid; width: 48px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: p.name; width: 170px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: round(p.cpu * 10) / 10 + "%"; width: 56px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: p.mem_mb + " MB"; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: p.disk_str; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: p.user; width: 60px; overflow: elide; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
+                                    Button { text: "Stop"; clicked => { stop-process(p.pid); } }
+                                    Button { text: "Kill"; clicked => { kill-process(p.pid); } }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- PAGE 2 : PERFORMANCE ----
+                if current-page == 2 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Performance"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Dim { text: "Live per-thread load · follows refresh interval"; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Dim { text: "CPU · " + round(cpu-usage) + "%"; }
+                                HistGraph { data: cpu-hist; a1: accent1; a2: accent2; bw: 2; gap: 1; gh: 40; }
+                            }
+                            VerticalLayout {
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Dim { text: "Memory · " + round(mem-pct) + "%"; }
+                                HistGraph { data: mem-hist; a1: accent1; a2: accent2; bw: 2; gap: 1; gh: 40; }
+                            }
+                        }
+                    }
+                    Card {
+                        CardTitle { text: "Per-core CPU · live"; }
+                        ScrollView {
+                            height: 440px;
+                            VerticalLayout {
+                                spacing: 8px;
+                                for c in cores: HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: c.label; width: 60px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
+                                    GBar { pct: c.usage; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                    Text { text: round(c.usage) + "%"; width: 50px; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- PAGE 3 : SERVICES ----
+                if current-page == 3 : VerticalLayout {
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Services"; color: #ffffff; font-size: 24px; font-weight: 800; horizontal-stretch: 1; vertical-alignment: center; }
+                        Button { text: "↻ Refresh"; clicked => { refresh-services(); } }
+                    }
+                    Dim { text: "User session services · systemctl --user start / stop / restart"; }
+                    Dim { text: "No services found — is systemd running?"; visible: svc-tot == 0; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "● " + svc-act + " active / " + svc-tot + " total"; color: #ffffff; font-size: 13px; font-weight: 700; width: 190px; vertical-alignment: center; }
+                            GBar { pct: svc-tot > 0 ? svc-act * 100 / svc-tot : 0; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                        }
+                        ListView {
+                            height: 400px;
+                            for s[i] in services: Rectangle {
+                                height: 36px;
+                                background: Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00;
+                                border-radius: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    padding-left: 8px;
+                                    padding-right: 4px;
+                                    Text { text: s.active ? "●" : "○"; color: s.active ? accent1 : #555c66; width: 24px; font-size: 14px; vertical-alignment: center; }
+                                    Text { text: s.name; width: 260px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: s.state; width: 90px; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
+                                    Button { text: s.active ? "Stop" : "Start"; clicked => { service-action(s.name, s.active ? "stop" : "start"); } }
+                                    Button { text: "Restart"; clicked => { service-action(s.name, "restart"); } }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- PAGE 4 : STARTUP ----
+                if current-page == 4 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Startup"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Dim { text: "Apps that launch at login · toggles only touch your own ~/.config/autostart"; }
+                    Dim { text: "No autostart entries in ~/.config/autostart or /etc/xdg/autostart"; visible: auto-tot == 0; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "✓ " + auto-act + " enabled / " + auto-tot + " total"; color: #ffffff; font-size: 13px; font-weight: 700; width: 190px; vertical-alignment: center; }
+                            GBar { pct: auto-tot > 0 ? auto-act * 100 / auto-tot : 0; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                        }
+                        ListView {
+                            height: 420px;
+                            for a[i] in autostart: Rectangle {
+                                height: 34px;
+                                background: Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00;
+                                border-radius: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    padding-left: 8px;
+                                    CheckBox {
+                                        checked: a.enabled;
+                                        toggled => { toggle-autostart(a.file, self.checked); }
+                                    }
+                                    Text { text: a.name; width: 260px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: a.file; overflow: elide; color: #9aa0a6; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- PAGE 5 : APPS ----
+                if current-page == 5 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Applications (" + app-tot + ")"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Dim { text: "Flatpak applications · bar shows size relative to the largest"; }
+                    Dim { text: "No Flatpak apps found — is Flatpak installed with apps?"; visible: app-tot == 0; }
+                    Card {
+                        ListView {
+                            height: 440px;
+                            for ap[i] in apps: Rectangle {
+                                height: 36px;
+                                background: Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00;
+                                border-radius: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    padding-left: 8px;
+                                    padding-right: 4px;
+                                    Text { text: ap.name; width: 220px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    GBar { pct: ap.pct; a1: accent1; a2: accent2; width: 110px; }
+                                    Text { text: ap.size; width: 80px; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
+                                    Text { text: ap.origin; width: 90px; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
+                                    Button { text: "Uninstall"; clicked => { uninstall-app(ap.id); } }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- PAGE 6 : CLEANER ----
+                if current-page == 6 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Cleaner"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Dim { text: "Only your own cache, trash and thumbnails · journal vacuum may ask for root"; }
+                    Card {
+                        CardTitle { text: "Reclaimable space"; }
+                        VerticalLayout {
+                            spacing: 8px;
+                            for r in size-rows: HorizontalLayout {
+                                spacing: 10px;
+                                Text { text: r.label; width: 110px; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                GBar { pct: r.pct; a1: accent1; a2: accent2; horizontal-stretch: 1; }
+                                Text { text: r.info; width: 80px; color: #9aa0a6; font-size: 13px; vertical-alignment: center; }
+                            }
+                        }
+                        Dim { text: cleaner-info; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: "Journal 200M"; clicked => { clean-kind("journal"); } }
+                            Button { text: "Trash"; clicked => { clean-kind("trash"); } }
+                            Button { text: "Thumbnails"; clicked => { clean-kind("thumbs"); } }
+                            Button { text: "Safe cache"; clicked => { clean-kind("all"); } }
+                        }
+                    }
+                }
+
+                // ---- PAGE 7 : LOGS ----
+                if current-page == 7 : VerticalLayout {
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Logs"; color: #ffffff; font-size: 24px; font-weight: 800; horizontal-stretch: 1; vertical-alignment: center; }
+                        Button { text: "↻ Refresh"; clicked => { refresh-logs(); } }
+                    }
+                    Dim { text: "Last 200 journal lines · errors and warnings counted locally"; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "⛔ " + log-err + " errors"; color: #ffffff; font-size: 13px; font-weight: 700; width: 130px; vertical-alignment: center; }
+                            GBar { pct: log-tot > 0 ? log-err * 100 / log-tot : 0; a1: #da4453; a2: #f67400; horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "⚠ " + log-warn + " warnings"; color: #ffffff; font-size: 13px; font-weight: 700; width: 130px; vertical-alignment: center; }
+                            GBar { pct: log-tot > 0 ? log-warn * 100 / log-tot : 0; a1: #f7b500; a2: #f67400; horizontal-stretch: 1; }
+                        }
+                        Dim { text: "in last " + log-tot + " journal lines"; }
+                        ScrollView {
+                            height: 440px;
+                            Text { text: logs-text; color: #cfd4dc; font-size: 12px; wrap: word-wrap; }
+                        }
+                    }
+                }
+
+                // ---- PAGE 8 : ABOUT ----
+                if current-page == 8 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "About"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Card {
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Rectangle {
+                                width: 64px; height: 64px; border-radius: 18px;
+                                background: @linear-gradient(135deg, accent1, accent2);
+                                Text { text: "❄"; color: #ffffff; font-size: 32px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            VerticalLayout {
+                                spacing: 2px;
+                                Text { text: "FreeMon 0.1.0"; color: #ffffff; font-size: 20px; font-weight: 800; }
+                                Dim { text: "Free System Monitor for KDE · Rust + Slint · GPL-3.0-or-later"; }
+                            }
+                        }
+                    }
+                    Card {
+                        Body { text: "Host: " + hostname; }
+                        Body { text: "Distro: " + distro; }
+                        Body { text: "Kernel: " + kernel; }
+                        Body { text: "Desktop: " + desktop + "  ·  Uptime " + uptime; }
+                        Body { text: "CPU: " + cpu-brand + " × " + cpu-count; }
+                        Body { text: "GPU: " + gpu-name; }
+                    }
+                }
+
+                // ---- PAGE 9 : THEME ----
+                if current-page == 9 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "Theme"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    Card {
+                        CardTitle { text: "Accent gradient"; }
+                        Dim { text: "Pick a vibe — sidebar, bars, graphs and status follow instantly."; }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout { spacing: 4px; Swatch { c1: #3daee9; c2: #7b61ff; selected: accent-name == "breeze"; picked => { set-accent("breeze"); } } Dim { text: "Breeze"; horizontal-alignment: center; } }
+                            VerticalLayout { spacing: 4px; Swatch { c1: #2ecc71; c2: #1abc9c; selected: accent-name == "mint"; picked => { set-accent("mint"); } } Dim { text: "Mint"; horizontal-alignment: center; } }
+                            VerticalLayout { spacing: 4px; Swatch { c1: #f67400; c2: #da4453; selected: accent-name == "sunset"; picked => { set-accent("sunset"); } } Dim { text: "Sunset"; horizontal-alignment: center; } }
+                            VerticalLayout { spacing: 4px; Swatch { c1: #9b59b6; c2: #e84393; selected: accent-name == "grape"; picked => { set-accent("grape"); } } Dim { text: "Grape"; horizontal-alignment: center; } }
+                            VerticalLayout { spacing: 4px; Swatch { c1: #f7b500; c2: #f67400; selected: accent-name == "gold"; picked => { set-accent("gold"); } } Dim { text: "Gold"; horizontal-alignment: center; } }
+                        }
+                    }
+                    Card {
+                        CardTitle { text: "Live updates"; }
+                        Dim { text: "How often graphs and numbers refresh. Saved automatically."; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button { text: "1s ⚡"; primary: refresh-secs == 1; clicked => { set-interval(1); } }
+                            Button { text: "2s"; primary: refresh-secs == 2; clicked => { set-interval(2); } }
+                            Button { text: "5s 🌙"; primary: refresh-secs == 5; clicked => { set-interval(5); } }
+                        }
+                    }
+                    Card {
+                        CardTitle { text: "Status"; }
+                        Body { text: status-msg; }
+                    }
+                }
+            }
+        }
+    }
+}

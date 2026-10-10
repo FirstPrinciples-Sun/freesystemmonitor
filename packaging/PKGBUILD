@@ -1,0 +1,23 @@
+# Maintainer: yourname <you@example.com>
+pkgname=freemon
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Free System Monitor for KDE Plasma (Rust + Slint)"
+arch=('x86_64')
+url="https://github.com/yourname/freemon"
+license=('GPL-3.0-or-later')
+depends=('fontconfig' 'libgl' 'wayland')
+makedepends=('cargo' 'rustc' 'pkgconf' 'gcc')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/freemon" "$pkgdir/usr/bin/freemon"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

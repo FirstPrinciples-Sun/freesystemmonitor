@@ -1,0 +1,18 @@
+[package]
+name = "freemon"
+version = "0.1.0"
+edition = "2021"
+description = "Free System Monitor for KDE Plasma - modern, fast, Rust + Slint"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/yourname/freemon"
+keywords = ["kde", "plasma", "system-monitor", "task-manager", "rust"]
+categories = ["gui", "system"]
+
+[dependencies]
+slint = "1.10"
+sysinfo = "0.36"
+anyhow = "1"
+chrono = "0.4"
+
+[build-dependencies]
+slint-build = "1.10"
