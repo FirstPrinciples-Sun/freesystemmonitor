@@ -119,6 +119,17 @@ fn main() -> anyhow::Result<()> {
     let sel_pid: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
     let sel_pid_cb = sel_pid.clone();
     let sel_pid_cb2 = sel_pid.clone();
+    // test hook: initial sort mode
+    if let Ok(s) = std::env::var("FREEMON_SORT") {
+        let mode = process::SortMode::from_str(&s);
+        *sort_mode.lock().unwrap() = mode;
+        ui.set_sort_idx(mode.index());
+        ui.set_sort_name(to_shared(s));
+    }
+    let collapsed: Arc<Mutex<std::collections::HashSet<u32>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let collapsed_cb = collapsed.clone();
+    let collapsed_cb2 = collapsed.clone();
     let log_level: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
     let log_level_cb = log_level.clone();
     let log_level_cb2 = log_level.clone();
@@ -219,6 +230,22 @@ fn main() -> anyhow::Result<()> {
                 ui.set_sort_idx(idx);
                 ui.set_sort_name(to_shared(label));
             });
+        });
+    }
+    {
+        let w = weak.clone();
+        ui.on_toggle_collapse(move |pid| {
+            let mut set = collapsed_cb.lock().unwrap();
+            if pid >= 0 {
+                let p = pid as u32;
+                if !set.remove(&p) {
+                    set.insert(p);
+                }
+            }
+            if set.len() > 500 {
+                set.clear();
+            }
+            let _ = w.upgrade_in_event_loop(|_| {});
         });
     }
     {
@@ -371,14 +398,18 @@ fn main() -> anyhow::Result<()> {
             let snap = st.snapshot(secs as f32);
             let filter = search_filter.lock().unwrap().clone();
             let sort = *sort_mode.lock().unwrap();
+            let collapsed_now = collapsed_cb2.lock().unwrap().clone();
             let procs = process::top_processes(
-                &st.sys,
-                &users,
-                &mut prev_disk,
+                process::Ctx {
+                    sys: &st.sys,
+                    users: &users,
+                    prev_disk: &mut prev_disk,
+                },
                 secs as f32,
                 &filter,
                 100,
                 sort,
+                &collapsed_now,
             );
             let cores = st.core_usages();
             let temp = sensors::cpu_temp();
@@ -551,23 +582,75 @@ fn main() -> anyhow::Result<()> {
                     .collect();
                 ui.set_mounts(std::rc::Rc::new(slint::VecModel::from(mrows)).into());
 
-                let rows: Vec<ProcRow> = procs
-                    .iter()
-                    .map(|p| ProcRow {
-                        name: to_shared(p.name.clone()),
-                        pid: p.pid,
-                        cpu: p.cpu,
-                        mem: p.mem_pct,
-                        mem_mb: (p.mem_mb * 10.0).round() / 10.0,
-                        user: to_shared(p.user.clone()),
-                        status: to_shared(p.status.clone()),
-                        disk_str: to_shared(p.disk_str.clone()),
-                        icon: match proc_icon_paths.get(&p.pid).and_then(|o| o.as_deref()) {
-                            Some(path) => cached_icon(path),
-                            None => Default::default(),
-                        },
-                    })
-                    .collect();
+                let mkrow = |p: &process::ProcInfo| ProcRow {
+                    name: to_shared(p.name.clone()),
+                    pid: p.pid,
+                    cpu: p.cpu,
+                    mem: p.mem_pct,
+                    mem_mb: (p.mem_mb * 10.0).round() / 10.0,
+                    user: to_shared(p.user.clone()),
+                    status: to_shared(p.status.clone()),
+                    disk_str: to_shared(p.disk_str.clone()),
+                    icon: match proc_icon_paths.get(&p.pid).and_then(|o| o.as_deref()) {
+                        Some(path) => cached_icon(path),
+                        None => Default::default(),
+                    },
+                    kind: 1,
+                    header: to_shared(""),
+                    depth: p.depth,
+                    arrow: to_shared(if p.kids {
+                        if p.collapsed { "▸" } else { "▾" }
+                    } else {
+                        ""
+                    }),
+                };
+                let is_tree = sort == process::SortMode::Tree;
+                let rows: Vec<ProcRow> = if is_tree {
+                    procs.iter().map(&mkrow).collect()
+                } else {
+                    let cat_of = |p: &process::ProcInfo| -> usize {
+                        if p.user == "root" || p.name.starts_with('[') {
+                            2
+                        } else if proc_icon_paths
+                            .get(&p.pid)
+                            .and_then(|o| o.as_ref())
+                            .is_some()
+                        {
+                            0
+                        } else {
+                            1
+                        }
+                    };
+                    let mut out = vec![];
+                    for (gi, title) in
+                        ["Apps", "Background processes", "System"].iter().enumerate()
+                    {
+                        let members: Vec<&process::ProcInfo> =
+                            procs.iter().filter(|p| cat_of(p) == gi).collect();
+                        if members.is_empty() {
+                            continue;
+                        }
+                        out.push(ProcRow {
+                            name: to_shared(""),
+                            pid: 0,
+                            cpu: 0.0,
+                            mem: 0.0,
+                            mem_mb: 0.0,
+                            user: to_shared(""),
+                            status: to_shared(""),
+                            disk_str: to_shared(""),
+                            icon: Default::default(),
+                            kind: 0,
+                            header: to_shared(format!("● {} ({})", title, members.len())),
+                            depth: 0,
+                            arrow: to_shared(""),
+                        });
+                        for p in members {
+                            out.push(mkrow(p));
+                        }
+                    }
+                    out
+                };
                 ui.set_processes(std::rc::Rc::new(slint::VecModel::from(rows)).into());
 
                 let crows: Vec<CoreRow> = cores

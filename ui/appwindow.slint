@@ -10,6 +10,10 @@ struct ProcRow {
     status: string,
     disk_str: string,
     icon: image,
+    kind: int,
+    header: string,
+    depth: int,
+    arrow: string,
 }
 
 struct CoreRow {
@@ -449,6 +453,7 @@ export component AppWindow inherits Window {
     callback set-sort(string);
     callback select-process(int, string);
     callback nice-delta(int);
+    callback toggle-collapse(int);
     callback service-action(string, string);
     callback refresh-services();
     callback toggle-autostart(string, bool);
@@ -709,7 +714,7 @@ export component AppWindow inherits Window {
                                 horizontal-stretch: 1;
                             }
                             ComboBox {
-                                model: ["CPU", "Memory", "Disk", "Name", "PID"];
+                                model: ["CPU", "Memory", "Disk", "Name", "PID", "Tree"];
                                 current-index <=> sort-idx;
                                 selected(value) => { set-sort(value); }
                                 width: 110px;
@@ -724,17 +729,30 @@ export component AppWindow inherits Window {
                         ListView {
                             height: 420px;
                             for p[i] in processes: Rectangle {
-                                height: 36px;
-                                background: p.pid == sel-pid ? #ffffff14 : (Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00);
+                                height: p.kind == 0 ? 30px : 36px;
+                                background: p.kind == 0 ? #ffffff00 : (p.pid == sel-pid ? #ffffff14 : (Math.mod(i, 2) == 0 ? #ffffff07 : #ffffff00));
                                 border-radius: 8px;
-                                TouchArea { x: 62px; width: 22px; height: 36px; clicked => { select-process(p.pid, p.name); } }
+                                // group header
                                 HorizontalLayout {
+                                    visible: p.kind == 0;
+                                    spacing: 8px;
+                                    padding-left: 8px;
+                                    Rectangle { width: 4px; height: 16px; border-radius: 2px; background: @linear-gradient(0deg, accent1, accent2); }
+                                    Text { text: p.header; color: #ffffff; font-size: 13px; font-weight: 700; vertical-alignment: center; }
+                                }
+                                // process row
+                                TouchArea { visible: p.kind != 0; x: 62px; width: 22px; height: 36px; clicked => { select-process(p.pid, p.name); } }
+                                TouchArea { visible: p.kind != 0 && p.arrow != ""; x: (90 + p.depth * 12) * 1px; width: 18px; height: 36px; clicked => { toggle-collapse(p.pid); } }
+                                HorizontalLayout {
+                                    visible: p.kind != 0;
                                     spacing: 6px;
                                     padding-left: 8px;
                                     padding-right: 4px;
                                     Text { text: p.pid; width: 48px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
                                     Image { source: p.icon; width: 22px; height: 22px; }
-                                    Text { text: p.name; width: 148px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
+                                    Text { width: (p.depth * 12) * 1px; }
+                                    Text { text: p.arrow; width: 18px; color: accent1; font-size: 12px; vertical-alignment: center; }
+                                    Text { text: p.name; width: max(60, 130 - p.depth * 12) * 1px; overflow: elide; color: #ffffff; font-size: 13px; vertical-alignment: center; }
                                     Text { text: round(p.cpu * 10) / 10 + "%"; width: 56px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
                                     Text { text: p.mem_mb + " MB"; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
                                     Text { text: p.disk_str; width: 72px; color: #dfe3ea; font-size: 13px; vertical-alignment: center; }
