@@ -10,6 +10,18 @@ pub struct IconDb {
     map: HashMap<String, String>,
 }
 
+/// (process key, icon name) for apps whose process name doesn't match
+/// any desktop-file key (e.g. comm "brave" vs Exec "brave-browser-stable").
+const ICON_ALIASES: &[(&str, &str)] = &[
+    ("brave", "brave-browser"),
+    ("kwin_wayland", "kwin"),
+    ("kwin_x11", "kwin"),
+    ("spotify", "spotify-client"),
+    ("code", "code"),
+    ("discord", "discord"),
+    ("steam", "steam"),
+];
+
 impl IconDb {
     pub fn build() -> Self {
         let mut map: HashMap<String, String> = HashMap::new();
@@ -49,12 +61,24 @@ impl IconDb {
                 }
             }
         }
-        // pass 2: one filesystem walk per theme root, indexed by wanted names
+        // pass 2: one filesystem walk per theme root, indexed by wanted names.
+        // alias targets must be indexed too (they may lack desktop files).
+        for (_, ic) in ICON_ALIASES {
+            wanted.insert(ic.to_string());
+        }
         let index = build_index(&wanted);
-        for (keys, icon) in pending {
-            if let Some(ipath) = index.get(&icon) {
+        for (keys, icon) in &pending {
+            if let Some(ipath) = index.get(icon) {
                 for k in keys {
-                    map.entry(k).or_insert_with(|| ipath.clone());
+                    map.entry(k.clone()).or_insert_with(|| ipath.clone());
+                }
+            }
+        }
+        // pass 3: well-known aliases for processes without matching desktop keys
+        for (alias, ic) in ICON_ALIASES {
+            if !map.contains_key(*alias) {
+                if let Some(ipath) = index.get(*ic) {
+                    map.insert(alias.to_string(), ipath.clone());
                 }
             }
         }
@@ -219,9 +243,20 @@ mod tests {
 
     #[test]
     fn fallback_strips_suffix() {
-        let mut db = IconDb { map: HashMap::new() };
+        let mut db = IconDb {
+            map: HashMap::new(),
+        };
         db.map.insert("firefox".into(), "/tmp/x.svg".into());
         assert_eq!(db.find("firefox-bin"), Some("/tmp/x.svg"));
         assert_eq!(db.find("nope"), None);
+    }
+
+    #[test]
+    fn aliases_resolve() {
+        let db = IconDb::build();
+        // brave's comm is "brave" but the desktop key is "brave-browser-stable"
+        if db.map.contains_key("brave-browser-stable") {
+            assert_eq!(db.find("brave"), db.find("brave-browser-stable"));
+        }
     }
 }

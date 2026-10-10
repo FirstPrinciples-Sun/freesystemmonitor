@@ -156,6 +156,48 @@ pub fn nvidia_info() -> Option<GpuInfo> {
     })
 }
 
+/// Intel integrated GPU activity via frequency proxy.
+/// Reads gt_act_freq_mhz / gt_max_freq_mhz / gt_min_freq_mhz from the
+/// DRM card whose PCI vendor is Intel (0x8086). Returns (usage%, freq label).
+pub struct IntelGpu {
+    pub usage: f32,
+    pub freq: String,
+}
+
+pub fn intel_gpu() -> Option<IntelGpu> {
+    let rd = std::fs::read_dir("/sys/class/drm").ok()?;
+    let mut cards: Vec<_> = rd
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("card") && n["card".len()..].chars().all(|c| c.is_ascii_digit())
+        })
+        .collect();
+    cards.sort_by_key(|e| e.file_name());
+    for c in cards {
+        let vendor =
+            std::fs::read_to_string(c.path().join("device/vendor")).unwrap_or_default();
+        if vendor.trim() != "0x8086" {
+            continue;
+        }
+        let read = |f: &str| {
+            std::fs::read_to_string(c.path().join(f))
+                .ok()
+                .and_then(|t| t.trim().parse::<f32>().ok())
+        };
+        let (act, max, min) = (read("gt_act_freq_mhz")?, read("gt_max_freq_mhz")?, read("gt_min_freq_mhz")?);
+        if max <= min {
+            return None;
+        }
+        let usage = ((act - min) / (max - min) * 100.0).clamp(0.0, 100.0);
+        return Some(IntelGpu {
+            usage,
+            freq: format!("{:.1} GHz", act / 1000.0),
+        });
+    }
+    None
+}
+
 /// GPU utilization 0..100, or None when it can't be measured.
 /// Tries NVIDIA (nvidia-smi), then AMD (amdgpu busy_percent sysfs).
 pub fn gpu_usage() -> Option<f32> {

@@ -295,6 +295,32 @@ component Body inherits Text {
     overflow: elide;
 }
 
+// big dashboard number with soft neon echo behind the glyphs
+component GlowNum inherits Rectangle {
+    in property <string> label;
+    in property <color> glow;
+    height: 28px;
+    Text {
+        text: label;
+        color: glow;
+        x: 1px;
+        y: 1px;
+        font-size: 20px;
+        font-weight: 700;
+        opacity: 0.55;
+        overflow: elide;
+        width: parent.width;
+    }
+    Text {
+        text: label;
+        color: #ffffff;
+        font-size: 20px;
+        font-weight: 700;
+        overflow: elide;
+        width: parent.width;
+    }
+}
+
 export component AppWindow inherits Window {
     title: "FreeMon — System Monitor for KDE";
     preferred-width: 1160px;
@@ -360,6 +386,10 @@ export component AppWindow inherits Window {
     in-out property <float> mem-free: 0;
     in-out property <float> gpu-use: -1;
     in-out property <string> gpu-sub: "usage unavailable on this GPU";
+    in-out property <float> intel-use: -1;
+    in-out property <string> intel-sub: "integrated · no driver data";
+    in-out property <bool> alert-on: false;
+    in-out property <string> alert-text: "";
     in-out property <float> batt-pct: -1;
     in-out property <bool> batt-charging: false;
     in-out property <color> area-fill: #3daee92e;
@@ -477,6 +507,17 @@ export component AppWindow inherits Window {
                     alignment: start;
                     spacing: 12px;
                     Text { text: "Overview"; color: #ffffff; font-size: 24px; font-weight: 800; }
+                    if alert-on : Rectangle {
+                        background: #da445322;
+                        border-width: 1px;
+                        border-color: #da445366;
+                        border-radius: 12px;
+                        HorizontalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+                            Text { text: alert-text; color: #ffd9d9; font-size: 13px; font-weight: 700; vertical-alignment: center; }
+                        }
+                    }
                     HorizontalLayout {
                         spacing: 12px;
                         Card {
@@ -509,15 +550,38 @@ export component AppWindow inherits Window {
                             Dim { text: disk-stat; horizontal-alignment: center; }
                             Dim { text: "up " + uptime; horizontal-alignment: center; }
                         }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
                         Card {
                             horizontal-stretch: 1;
-                            if gpu-use >= 0 : HorizontalLayout {
+                            HorizontalLayout {
                                 alignment: center;
-                                Donut { pct: gpu-use; a1: accent2; caption: round(gpu-use) + "%"; }
+                                Donut { pct: gpu-use; a1: accent2; caption: gpu-use >= 0 ? round(gpu-use) + "%" : "—"; }
                             }
-                            CardTitle { text: "GPU"; horizontal-alignment: center; }
+                            CardTitle { text: "NVIDIA GPU"; horizontal-alignment: center; }
                             Dim { text: gpu-name; horizontal-alignment: center; }
                             Dim { text: gpu-sub; horizontal-alignment: center; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: intel-use; a1: accent1; caption: intel-use >= 0 ? round(intel-use) + "%" : "—"; }
+                            }
+                            CardTitle { text: "Intel iGPU"; horizontal-alignment: center; }
+                            Dim { text: "Raptor Lake-P UHD Graphics"; horizontal-alignment: center; }
+                            Dim { text: intel-sub; horizontal-alignment: center; }
+                        }
+                        Card {
+                            horizontal-stretch: 1;
+                            if batt-pct >= 0 : HorizontalLayout {
+                                alignment: center;
+                                Donut { pct: batt-pct; a1: accent1; caption: round(batt-pct) + "%"; }
+                            }
+                            CardTitle { text: "Battery"; horizontal-alignment: center; }
+                            Dim { text: batt-pct >= 0 ? ("🔋  " + battery + (batt-charging ? " · charging" : "")) : "🔋  AC power · no battery"; horizontal-alignment: center; }
+                            Dim { text: "🌡  " + cpu-temp; horizontal-alignment: center; }
                         }
                     }
                     HorizontalLayout {
@@ -554,13 +618,10 @@ export component AppWindow inherits Window {
                         spacing: 12px;
                         Card {
                             horizontal-stretch: 1;
-                            CardTitle { text: "Power"; }
-                            if batt-pct >= 0 : HorizontalLayout {
-                                alignment: center;
-                                Donut { pct: batt-pct; a1: accent1; caption: round(batt-pct) + "%"; }
-                            }
-                            Dim { text: batt-pct >= 0 ? ("🔋  " + battery + (batt-charging ? " · charging" : "")) : "🔋  AC power · no battery"; horizontal-alignment: center; }
-                            Dim { text: "🌡  " + cpu-temp + "  ·  up " + uptime; horizontal-alignment: center; }
+                            CardTitle { text: "Thermals & Uptime"; }
+                            GlowNum { label: "🌡  " + cpu-temp; glow: accent2; }
+                            Dim { text: "up " + uptime + "  ·  load " + load-avg; }
+                            Dim { text: "🔋  " + battery; }
                         }
                         Card {
                             horizontal-stretch: 1;

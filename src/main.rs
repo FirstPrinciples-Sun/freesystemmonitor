@@ -1,6 +1,6 @@
 mod backend;
 
-use backend::{apps, autostart, cleaner, icons, logs, process, sensors, services, system};
+use backend::{alerts, apps, autostart, cleaner, icons, logs, process, sensors, services, system};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -277,6 +277,9 @@ fn main() -> anyhow::Result<()> {
             std::collections::HashMap::new();
         let mut last_gpu_use: f32 = -1.0;
         let mut last_gpu_sub = String::from("usage unavailable on this GPU");
+        let mut last_intel_use: f32 = -1.0;
+        let mut last_intel_sub = String::from("integrated · no driver data");
+        let mut active_alerts: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut tick: u64 = 0;
         let mut cpu_hist: VecDeque<f32> = VecDeque::from(vec![0.0; 60]);
         let mut mem_hist: VecDeque<f32> = VecDeque::from(vec![0.0; 60]);
@@ -349,8 +352,42 @@ fn main() -> anyhow::Result<()> {
                     last_gpu_use = v;
                     last_gpu_sub = String::from("measured live");
                 }
+                // Intel iGPU activity via frequency proxy (cheap sysfs reads).
+                if let Some(ig) = sensors::intel_gpu() {
+                    last_intel_use = ig.usage;
+                    last_intel_sub = format!("{} · freq activity", ig.freq);
+                }
             }
             let gpu_sub_now = last_gpu_sub.clone();
+            let intel_use_now = last_intel_use;
+            let intel_sub_now = last_intel_sub.clone();
+            // alerts with rising-edge desktop notifications
+            let temp_c = temp
+                .trim_end_matches("°C")
+                .trim()
+                .parse::<i64>()
+                .ok();
+            let found = alerts::evaluate(&alerts::AlertInput {
+                cpu: snap.cpu_usage,
+                mem_pct: pct(snap.mem_used_gb, snap.mem_total_gb),
+                disk_pct: snap.disk_pct,
+                swap_pct: pct(snap.swap_used_gb, snap.swap_total_gb),
+                temp_c,
+            });
+            let keys: std::collections::HashSet<String> =
+                found.iter().map(|a| a.key.to_string()).collect();
+            for a in &found {
+                if !active_alerts.contains(a.key) {
+                    alerts::notify(a.critical, "FreeMon alert", &a.text);
+                }
+            }
+            active_alerts = keys;
+            let alert_text = found
+                .iter()
+                .map(|a| format!("{} {}", if a.critical { "⛔" } else { "⚠" }, a.text))
+                .collect::<Vec<_>>()
+                .join("   ·   ");
+            let alert_on = !found.is_empty();
             let gpu_use_now = last_gpu_use;
             let batt_now = sensors::battery_pct();
             let mounts_now = snap
@@ -399,6 +436,10 @@ fn main() -> anyhow::Result<()> {
                 ui.set_proc_count(proc_count);
                 ui.set_gpu_use(gpu_use_now);
                 ui.set_gpu_sub(to_shared(gpu_sub_now));
+                ui.set_intel_use(intel_use_now);
+                ui.set_intel_sub(to_shared(intel_sub_now));
+                ui.set_alert_on(alert_on);
+                ui.set_alert_text(to_shared(alert_text));
                 match batt_now {
                     Some((v, charging)) => {
                         ui.set_batt_pct(v);
